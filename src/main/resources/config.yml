@@ -1,0 +1,76 @@
+settings:
+  cooldown: 300
+  warmup-time: 5
+  price: 500.0
+  radius:
+    min: 1000
+    max: 10000
+    hardcore: 100000
+  disable-chat-messages: false
+  show-coordinates: true
+
+actionbar:
+  enabled: true
+  text: "<gray>Teleporting in <blue>%time%</blue>s...</gray>"
+
+effects:
+  particle: PORTAL
+  amount: 25
+  blindness-duration: 3
+  slow-falling-duration: 5
+
+sounds:
+  tick:
+    name: BLOCK_NOTE_BLOCK_PLING
+    volume: 1.0
+    pitch: 1.0
+  success:
+    name: ENTITY_ENDERMAN_TELEPORT
+    volume: 1.0
+    pitch: 1.0
+  cancel:
+    name: BLOCK_NOTE_BLOCK_BASS
+    volume: 1.0
+    pitch: 0.5
+
+unsafe-blocks:
+  - LAVA
+  - WATER
+  - MAGMA_BLOCK
+  - CACTUS
+
+messages:
+  searching: "<yellow><b>MoroRTP</b> <gray>| Searching for a safe location... This may take a second.</gray></yellow>"
+  success: "<green><b>MoroRTP</b> <gray>| Success! You have been teleported to:</gray> <white>X:</white> <green>%x%</green>, <white>Y:</white> <green>%y%</green>, <white>Z:</white> <green>%z%</green>. <gray>Deducted: $%price%</gray></green>"
+  success-simple: "<green><b>MoroRTP</b> <gray>| Success! Teleportation complete. Deducted: $%price%</gray></green>"
+  only-players: "<red><b>MoroRTP</b> <gray>| This command can only be executed by players!</gray></red>"
+  warmup-started: "<yellow><b>MoroRTP</b> <gray>| Teleportation starts in</gray> <white>%time%s</white>. <gray><b>Do not move!</b></gray></yellow>"
+  already-teleporting: "<red><b>MoroRTP</b> <gray>| You are already awaiting teleportation!</gray></red>"
+  cooldown: "<red><b>MoroRTP</b> <gray>| Command will be available in</gray> <white>%time%s!</white></red>"
+  moved: "<red><b>MoroRTP</b> <gray>| Teleportation cancelled due to movement!</gray></red>"
+  damaged: "<red><b>MoroRTP</b> <gray>| Teleportation cancelled due to damage taken!</gray></red>"
+  hardcore-respawn: "<red><b>MoroRTP</b> <gray>| You have respawned in a completely unknown location...</gray></red>"
+  no-money: "<red><b>MoroRTP</b> <gray>| Insufficient funds! You need:</gray> <white>$%price%</white></red>"
+
+gui:
+  title: "<gradient:gold:yellow>Select Teleport Zone</gradient>"
+  rows: 3
+  fill-empty: true
+  empty-pane-name: " "
+  items:
+    11:
+      material: GRASS_BLOCK
+      name: "<green>Normal RTP"
+      lore: 
+        - "<gray>Teleport to a random location"
+        - "<yellow>Price: $500"
+      price: 500
+      radius: 5000
+    15:
+      material: COMPASS
+      name: "<aqua>Distant RTP"
+      lore: 
+        - "<gray>Takes you very far away"
+        - "<yellow>Price: $2000"
+      price: 2000
+      radius: 20000

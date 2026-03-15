@@ -1,0 +1,9 @@
+name: MoroRTP
+version: '1.0'
+main: net.morosmp.rtp.MoroRTP
+api-version: '1.21'
+softdepend: [WorldGuard, Vault]
+commands:
+  rtp:
+    description: Рандомная телепортация
+    aliases: [wild]

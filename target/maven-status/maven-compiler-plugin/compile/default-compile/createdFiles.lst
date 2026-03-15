@@ -1,0 +1,11 @@
+net\morosmp\rtp\ConfigManager.class
+net\morosmp\rtp\MenuListener.class
+net\morosmp\rtp\WorldGuardHook.class
+net\morosmp\rtp\RTPCommand.class
+net\morosmp\rtp\RTPGui.class
+net\morosmp\rtp\RTPTeleportTask.class
+net\morosmp\rtp\MoroRTP.class
+net\morosmp\rtp\WorldUnlockManager.class
+net\morosmp\rtp\RTPListener.class
+net\morosmp\rtp\TeleportManager.class
+net\morosmp\rtp\VaultHook.class
