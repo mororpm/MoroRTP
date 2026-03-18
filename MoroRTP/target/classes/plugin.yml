@@ -1,0 +1,7 @@
+main: net.morosmp.rtp.MoroRTP
+name: MoroRTP
+version: 1.0.0
+api-version: '1.21'
+commands:
+  rtp:
+    description: Random teleport

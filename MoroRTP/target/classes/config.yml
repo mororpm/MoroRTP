@@ -1,0 +1,36 @@
+# MoroRTP Premium Configuration 1.21.11
+
+# --- Настройки Таймингов ---
+teleport-delay: 3
+teleport-cooldown: 300 # 5 минут
+
+# --- Настройки Дистанции ---
+min-distance: 500
+max-distance: 10000
+border-offset: 15
+# Если true, координаты в Аду делятся на 8 (как в ванилле)
+scale-nether-coords: true
+nether-y-level: 50
+
+# --- Настройки Звуков ---
+sounds:
+  click: "UI_BUTTON_CLICK"
+  countdown: "BLOCK_NOTE_BLOCK_HAT"
+  success: "ENTITY_ENDERMAN_TELEPORT"
+
+# --- Настройки GUI ---
+gui:
+  title: "§5§lMoro Random Teleport"
+  size: 27
+  world:
+    slot: 11
+    material: "GRASS_BLOCK"
+    name: "§a§lOverworld"
+  nether:
+    slot: 13
+    material: "NETHERRACK"
+    name: "§4§lNether"
+  end:
+    slot: 15
+    material: "END_STONE"
+    name: "§d§lThe End"

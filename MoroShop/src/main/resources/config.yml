@@ -1,0 +1,69 @@
+# MoroShop Premium Configuration
+prefix: "&f[&aᴍᴏʀᴏꜱʜᴏᴘ&f]"
+
+sounds:
+  click: "UI_BUTTON_CLICK"
+  success: "ENTITY_PLAYER_LEVELUP"
+  error: "ENTITY_VILLAGER_NO"
+
+# ГЛАВНОЕ МЕНЮ
+main-menu:
+  title: "&8Categories"
+  size: 27
+  categories:
+    blocks:
+      slot: 11
+      material: "GRASS_BLOCK"
+      name: "<#00F986>ʙʟᴏᴄᴋꜱ"
+      lore:
+        - "&7Click to browse building blocks"
+    ores:
+      slot: 13
+      material: "DIAMOND"
+      name: "<#00F986>ᴏʀᴇꜱ & ᴍɪɴᴇʀᴀʟꜱ"
+      lore:
+        - "&7Click to browse ores"
+    food:
+      slot: 15
+      material: "COOKED_BEEF"
+      name: "<#00F986>ꜰᴏᴏᴅ"
+      lore:
+        - "&7Click to browse food"
+
+# МАГАЗИНЫ КАТЕГОРИЙ (Динамические)
+shops:
+  blocks:
+    title: "&8Shop - Blocks"
+    items:
+      stone:
+        material: "STONE"
+        price: 5.0
+      oak_log:
+        material: "OAK_LOG"
+        price: 10.0
+      glass:
+        material: "GLASS"
+        price: 15.0
+  ores:
+    title: "&8Shop - Ores"
+    items:
+      diamond:
+        material: "DIAMOND"
+        price: 500.0
+      iron_ingot:
+        material: "IRON_INGOT"
+        price: 50.0
+  food:
+    title: "&8Shop - Food"
+    items:
+      cooked_beef:
+        material: "COOKED_BEEF"
+        price: 25.0
+      golden_apple:
+        material: "GOLDEN_APPLE"
+        price: 350.0
+
+messages:
+  not-enough-money: "%prefix% &cYou don't have enough money!"
+  inventory-full: "%prefix% &cYour inventory is full!"
+  purchased: "%prefix% &aYou bought %qty%x %item% for $%price%!"

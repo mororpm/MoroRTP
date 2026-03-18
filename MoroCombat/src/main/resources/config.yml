@@ -1,0 +1,14 @@
+combat-time: 15
+effects:
+  lightning-on-quit: true
+  broadcast-on-quit: true
+blocked-commands:
+  - "/spawn"
+  - "/home"
+  - "/tp"
+  - "/rtp"
+  - "/warp"
+messages:
+  action-bar: "§c§lIn Combat: §e%time%s"
+  quit-broadcast: "§c☠ §e%player% §ccombat logged and was eliminated!"
+  command-blocked: "§cYou cannot use teleport commands while in combat!"

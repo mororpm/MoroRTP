@@ -1,0 +1,6 @@
+net\morosmp\shop\Utils.class
+net\morosmp\shop\ShopCommand.class
+net\morosmp\shop\MoroShop.class
+net\morosmp\shop\BuyGUI.class
+net\morosmp\shop\ShopGUI.class
+net\morosmp\shop\VaultHook.class

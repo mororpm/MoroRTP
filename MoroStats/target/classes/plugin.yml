@@ -1,0 +1,5 @@
+name: MoroStats
+version: 1.0.0
+main: net.morosmp.stats.MoroStats
+api-version: '1.21'
+depend: [Vault]

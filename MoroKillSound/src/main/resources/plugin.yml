@@ -1,0 +1,4 @@
+name: MoroKillSound
+version: 1.0.0
+main: net.morosmp.killsound.MoroKillSound
+api-version: '1.21'

@@ -1,0 +1,7 @@
+main: net.morosmp.bounty.MoroBounty
+name: MoroBounty
+version: 1.0.0
+api-version: '1.21'
+commands:
+  bounty:
+    description: Bounty system

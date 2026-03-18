@@ -1,0 +1,4 @@
+name: MoroCombat
+version: 1.0.0
+main: net.morosmp.combat.MoroCombat
+api-version: '1.21'

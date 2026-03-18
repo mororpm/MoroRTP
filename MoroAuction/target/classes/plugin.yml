@@ -1,0 +1,7 @@
+main: net.morosmp.auction.MoroAuction
+name: MoroAuction
+version: 1.0.0
+api-version: '1.21'
+commands:
+  ah:
+    description: Auction House

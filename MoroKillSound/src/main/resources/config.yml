@@ -1,0 +1,18 @@
+# MoroKillSound Configuration
+
+# Настройки звука при убийстве игрока
+sound:
+  # Название звука из Bukkit API (например: ENTITY_WITHER_SPAWN, ENTITY_EXPERIENCE_ORB_PICKUP)
+  name: "ENTITY_WITHER_SPAWN"
+  
+  # Громкость (от 0.0 до 1.0+)
+  volume: 1.0
+  
+  # Тональность/Скорость (от 0.5 до 2.0). 1.0 = стандартный, 2.0 = писклявый/быстрый.
+  pitch: 1.0
+  
+  # Должен ли звук проигрываться всем вокруг или только убийце?
+  play-to-all: false
+  
+  # Если play-to-all: true, в каком радиусе игроки услышат этот звук?
+  radius: 20.0

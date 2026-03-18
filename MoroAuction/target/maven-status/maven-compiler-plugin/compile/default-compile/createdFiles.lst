@@ -1,0 +1,8 @@
+net\morosmp\auction\MoroAuction.class
+net\morosmp\auction\Utils.class
+net\morosmp\auction\AuctionState.class
+net\morosmp\auction\PlayerAuctionGUI.class
+net\morosmp\auction\AuctionCommand.class
+net\morosmp\auction\AuctionManager.class
+net\morosmp\auction\ChatSearchListener.class
+net\morosmp\auction\AuctionGUI.class
