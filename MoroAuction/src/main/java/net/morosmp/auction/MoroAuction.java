@@ -1,3 +1,13 @@
+package net.morosmp.auction;
+
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoDatabase;
+
+import net.milkbowl.vault.economy.Economy;
+
+import org.bukkit.plugin.java.JavaPlugin;
+
 public class MoroAuction extends JavaPlugin {
 
     private MongoClient mongoClient;
@@ -12,12 +22,11 @@ public class MoroAuction extends JavaPlugin {
         saveDefaultConfig();
 
         if (!setupEconomy()) {
-            getLogger().severe("Vault missing!");
+            getLogger().severe("Vault not found!");
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
 
-        // ✅ CONFIG-BASED Mongo
         String uri = getConfig().getString("database.uri");
         String dbName = getConfig().getString("database.name");
 
@@ -26,17 +35,15 @@ public class MoroAuction extends JavaPlugin {
 
         auctionManager = new AuctionManager(this, db);
 
-        // ✅ SINGLETON GUI INSTANCES
+        // ✅ СОЗДАЁМ ОДИН РАЗ
         auctionGUI = new AuctionGUI(this);
         playerGUI = new PlayerAuctionGUI(this);
         chatListener = new ChatSearchListener(this);
 
-        // ✅ SAFE COMMAND REGISTRATION
         if (getCommand("ah") != null) {
             getCommand("ah").setExecutor(new AuctionCommand(this));
         }
 
-        // ✅ EVENT REGISTRATION
         var pm = getServer().getPluginManager();
         pm.registerEvents(auctionGUI, this);
         pm.registerEvents(playerGUI, this);
@@ -55,9 +62,24 @@ public class MoroAuction extends JavaPlugin {
         return econ != null;
     }
 
-    public Economy getEconomy() { return econ; }
-    public AuctionManager getAuctionManager() { return auctionManager; }
-    public AuctionGUI getAuctionGUI() { return auctionGUI; }
-    public PlayerAuctionGUI getPlayerGUI() { return playerGUI; }
-    public ChatSearchListener getChatListener() { return chatListener; }
+    // 🔥 ВОТ ЧЕГО ТЕБЕ НЕ ХВАТАЛО
+    public AuctionGUI getAuctionGUI() {
+        return auctionGUI;
+    }
+
+    public PlayerAuctionGUI getPlayerGUI() {
+        return playerGUI;
+    }
+
+    public ChatSearchListener getChatListener() {
+        return chatListener;
+    }
+
+    public AuctionManager getAuctionManager() {
+        return auctionManager;
+    }
+
+    public Economy getEconomy() {
+        return econ;
+    }
 }
