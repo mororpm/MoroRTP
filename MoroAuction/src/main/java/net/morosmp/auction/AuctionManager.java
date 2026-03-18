@@ -42,20 +42,21 @@ public class AuctionManager {
     }
 
     public void listObject(Player p, ItemStack item, double price) {
+    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
         String b64 = serializeItem(item);
         if (b64 == null) return;
-        
-        long expireTime = System.currentTimeMillis() + (plugin.getConfig().getInt("settings.expire-hours", 48) * 3600000L);
+
+        long expireTime = System.currentTimeMillis() +
+                plugin.getConfig().getInt("settings.expire-hours") * 3600000L;
 
         Document doc = new Document("seller_uuid", p.getUniqueId().toString())
                 .append("seller_name", p.getName())
-                .append("material", item.getType().name())
-                .append("amount", item.getAmount())
                 .append("price", price)
                 .append("item_base64", b64)
                 .append("listed_at", System.currentTimeMillis())
                 .append("expire_at", expireTime);
-                
+
         collection.insertOne(doc);
+    });
     }
 }

@@ -1,4 +1,8 @@
 # MoroAuction Premium Configuration
+database:
+  uri: "mongodb+srv://<user>:<password>@cluster.../?retryWrites=true&w=majority"
+  name: "morosmp"
+
 settings:
   expire-hours: 48
   max-price: 1000000000.0
