@@ -1,0 +1,18 @@
+# MoroBounty - Physical Item Bounty Storage
+# -------------------------------------------------------
+# Format:  bounties.<victim-uuid>.sponsor   = placer's UUID (String)
+# bounties.<victim-uuid>.item      = Base64-serialized ItemStack
+# bounties.<victim-uuid>.itemDesc  = Human-readable label (for log/debug only)
+# bounties.<victim-uuid>.timestamp = Unix ms when bounty was placed
+#
+# This file is managed entirely by BountyManager.java.
+# Do NOT edit manually while the server is running.
+# -------------------------------------------------------
+
+bounties:
+  # Example entry (real data is Base64, this is illustrative):
+  # "550e8400-e29b-41d4-a716-446655440000":
+  #   sponsor: "110e8400-e29b-41d4-a716-446655440001"
+  #   item: "rO0ABXcEAAAACnNyAC9vcmcuYnVra..."   # Base64 blob
+  #   itemDesc: "10x DIAMOND"
+  #   timestamp: 1710000000000

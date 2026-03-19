@@ -1,57 +1,83 @@
 package net.morosmp.bounty;
 
 import org.bukkit.Bukkit;
-import org.bukkit.Sound;
+import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.inventory.ItemStack;
 
+/**
+ * DeathListener — handles bounty claiming when a victim is killed.
+ *
+ * Priority is set to HIGH so we run AFTER combat plugins (which may cancel
+ * or modify the death event) but still have a chance to drop our item.
+ */
 public class DeathListener implements Listener {
-    private final MoroBounty plugin;
-    public DeathListener(MoroBounty plugin) { this.plugin = plugin; }
 
-    @EventHandler
+    private final MoroBounty    plugin;
+    private final BountyManager manager;
+
+    public DeathListener(MoroBounty plugin, BountyManager manager) {
+        this.plugin  = plugin;
+        this.manager = manager;
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
     public void onDeath(PlayerDeathEvent event) {
-        Player victim = event.getEntity(); Player killer = victim.getKiller();
-        double baseBounty = plugin.getBountyManager().getTotalBounty(victim.getUniqueId());
-        if (baseBounty <= 0) return;
+        Player victim = event.getEntity();
 
+        // Quick exit if no bounty exists for this victim
+        if (!manager.hasBounty(victim.getUniqueId())) return;
+
+        Player killer = victim.getKiller();
+
+        // --- Case 1: Killed by environment / no player killer ---
+        // Bounty is canceled: reward is lost (item stays in YAML-deleted state).
+        // This discourages suicide-to-deny-bounty strategies.
         if (killer == null) {
-            plugin.getBountyManager().clearBounties(victim.getUniqueId());
-            String msg = plugin.getConfig().getString("messages.bounty-burned")
-                .replace("%amount%", String.format("%.0f", baseBounty))
-                .replace("%victim%", victim.getName());
-            Bukkit.broadcastMessage(Utils.color(msg, true));
+            String desc = manager.getBountyDescription(victim.getUniqueId());
+            manager.cancelBounty(victim.getUniqueId());
+            Bukkit.broadcastMessage(ChatColor.DARK_RED + "[MoroBounty] "
+                    + ChatColor.WHITE + "The bounty on " + ChatColor.RED + victim.getName()
+                    + ChatColor.WHITE + " (" + (desc != null ? desc : "?") + ") was burned — no player killer.");
             return;
         }
 
-        if (plugin.getBountyManager().isSameIP(killer, victim) || killer.equals(victim)) {
-            plugin.getBountyManager().clearBounties(victim.getUniqueId());
-            double penalty = plugin.getVaultHook().getBalance(victim) * 0.20; 
-            plugin.getVaultHook().withdraw(victim, penalty);
-            String msg = plugin.getConfig().getString("messages.fraud-detected")
-                .replace("%penalty%", String.format("%.0f", penalty));
-            killer.sendMessage(Utils.color(msg, true));
+        // --- Case 2: Self-kill (fall, /kill, etc. with themselves as killer) ---
+        // Treat same as no killer — cancel the bounty.
+        if (killer.equals(victim)) {
+            manager.cancelBounty(victim.getUniqueId());
             return;
         }
 
-        double walletReward = baseBounty * Math.pow(0.8, plugin.getBountyManager().getKillCount(killer.getUniqueId(), victim.getUniqueId())) * 0.8;
-        plugin.getVaultHook().deposit(killer, walletReward); 
-        plugin.getBountyManager().clearBounties(victim.getUniqueId()); 
-        plugin.getBountyManager().addKillRecord(killer.getUniqueId(), victim.getUniqueId());
+        // --- Case 3: Legitimate player kill — claim the bounty ---
 
-        victim.getWorld().strikeLightningEffect(victim.getLocation());
-        
-        String broadcast = plugin.getConfig().getString("messages.bounty-claimed")
-            .replace("%killer%", killer.getName())
-            .replace("%victim%", victim.getName())
-            .replace("%amount%", String.format("%.0f", walletReward));
-            
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            p.playSound(p.getLocation(), Sound.ENTITY_ENDER_DRAGON_GROWL, 0.5f, 1.5f);
-            p.sendMessage(Utils.color(broadcast, true));
-            p.sendTitle(Utils.color("&4&lBOUNTY CLAIMED", true), Utils.color("&e" + killer.getName() + " &7claimed &a$" + String.format("%.0f", walletReward), true), 10, 60, 20);
+        // Read the description BEFORE claiming (claim deletes the YAML entry)
+        String desc = manager.getBountyDescription(victim.getUniqueId());
+
+        // claimAndRemoveBounty() deserializes the item AND removes it from storage
+        ItemStack reward = manager.claimAndRemoveBounty(victim.getUniqueId());
+
+        if (reward == null) {
+            // Deserialization failed — log it and bail out; do NOT crash the event
+            plugin.getLogger().warning("Failed to deserialize bounty item for victim "
+                    + victim.getName() + " (" + victim.getUniqueId() + "). Bounty entry removed.");
+            return;
         }
+
+        // DROP the physical item at the victim's death location.
+        // dropItemNaturally() gives it a small random velocity so it lands on top
+        // of the victim's other drops, just like a regular item drop.
+        victim.getWorld().dropItemNaturally(victim.getLocation(), reward);
+
+        // Broadcast
+        Bukkit.broadcastMessage(
+                ChatColor.GREEN + "[MoroBounty] " + ChatColor.WHITE
+                + killer.getName() + " has claimed the bounty on "
+                + ChatColor.RED + victim.getName() + ChatColor.WHITE + "!"
+                + ChatColor.GOLD + " (" + (desc != null ? desc : reward.getAmount() + "x " + reward.getType().name()) + ")");
     }
 }

@@ -1,8 +1,5 @@
-net\morosmp\bounty\Utils.class
 net\morosmp\bounty\BountyManager.class
 net\morosmp\bounty\BountyGUI.class
 net\morosmp\bounty\DeathListener.class
-net\morosmp\bounty\VaultHook.class
 net\morosmp\bounty\MoroBounty.class
 net\morosmp\bounty\BountyCommand.class
-net\morosmp\bounty\Database.class

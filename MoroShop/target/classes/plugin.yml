@@ -1,9 +1,0 @@
-name: MoroShop
-version: 1.0.0
-main: net.morosmp.shop.MoroShop
-api-version: '1.21'
-depend: [Vault]
-commands:
-  shop:
-    description: Open the main shop GUI
-    aliases: [store, buy]
