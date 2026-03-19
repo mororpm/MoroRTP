@@ -1,0 +1,15 @@
+name: MoroSettings
+version: 1.0.0
+main: net.morosmp.settings.SettingsPlugin
+api-version: '1.21'
+description: Per-player settings GUI (PM toggle, Kill sounds toggle).
+commands:
+  settings:
+    description: Open the settings menu
+    usage: /settings
+  msg:
+    description: Send a private message
+    usage: /msg <player> <message>
+  r:
+    description: Reply to the last private message
+    usage: /r <message>

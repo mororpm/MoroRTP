@@ -1,0 +1,11 @@
+# MoroHomes Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Default number of home slots every player starts with.
+default-max-homes: 1
+
+# Physical Diamond cost to unlock each additional home slot.
+# Key   = the slot number being unlocked (2 = second home, 3 = third, etc.)
+# Value = number of Diamonds required (removed from inventory on purchase)
+upgrades:
+  2: 64
+  3: 128

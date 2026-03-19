@@ -1,0 +1,21 @@
+name: MoroWarp
+version: 1.0.0
+main: net.morosmp.warp.WarpPlugin
+api-version: '1.21'
+description: Admin-managed server warps.
+permissions:
+  morowarp.admin:
+    description: Allows setting and deleting warps.
+    default: op
+commands:
+  setwarp:
+    description: Set a warp at your location (admin)
+    usage: /setwarp <name>
+    permission: morowarp.admin
+  warp:
+    description: Teleport to a warp
+    usage: /warp [name]
+  delwarp:
+    description: Delete a warp (admin)
+    usage: /delwarp <name>
+    permission: morowarp.admin

@@ -1,39 +1,40 @@
 package net.morosmp.bounty;
 
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.ItemStack;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import java.util.logging.Level;
 
 /**
- * BountyManager — the single source of truth for all bounty data.
+ * BountyManager — единственный источник правды для всех данных баунти.
  *
- * Storage format (bounties.yml):
+ * Формат хранения (bounties.yml):
  *   bounties:
  *     <victim-uuid>:
  *       sponsor:   <placer-uuid>
- *       item:      <Base64-encoded ItemStack>
- *       itemDesc:  "10x DIAMOND"          # human-readable, debug only
+ *       item:      <Base64 ItemStack>
+ *       itemDesc:  "10x DIAMOND"     # человекочитаемый лейбл, только для логов
  *       timestamp: 1710000000000
  *
- * Serialization strategy:
- *   Paper 1.21 provides ItemStack#serializeAsBytes() / ItemStack.deserializeBytes()
- *   which handles ALL item data (NBT, custom model data, enchantments, lore, etc.)
- *   and is guaranteed to work across reloads on the same server version.
- *   We Base64-encode the raw bytes so they fit safely in a YAML string value.
+ * Сериализация:
+ *   ItemStack#serializeAsBytes() / ItemStack.deserializeBytes() — Paper 1.20.4+.
+ *   Сохраняет ВСЕ данные: имя, лор, зачарования, NBT.
  */
 public class BountyManager {
 
     private static final String BOUNTIES_PATH = "bounties.";
 
-    private final MoroBounty plugin;
-    private File              dataFile;
-    private FileConfiguration dataConfig;
+    private final MoroBounty      plugin;
+    private       File            dataFile;
+    private       FileConfiguration dataConfig;
 
     public BountyManager(MoroBounty plugin) {
         this.plugin = plugin;
@@ -49,40 +50,30 @@ public class BountyManager {
         dataConfig = YamlConfiguration.loadConfiguration(dataFile);
     }
 
-    /** Flushes the in-memory config to disk. Called after every write operation. */
     private void save() {
         try {
             dataConfig.save(dataFile);
         } catch (IOException e) {
-            plugin.getLogger().log(Level.SEVERE, "Could not save bounties.yml!", e);
+            plugin.getLogger().log(Level.SEVERE, "Не удалось сохранить bounties.yml!", e);
         }
     }
 
     // -------------------------------------------------------------------------
-    // Serialization helpers  (Paper 1.21 API — no external libraries needed)
+    // Сериализация (Paper 1.21 API)
     // -------------------------------------------------------------------------
 
-    /**
-     * Converts an ItemStack into a Base64 string using Paper's native byte serializer.
-     * This preserves ALL item data including custom names, lore, enchantments, NBT.
-     */
     public String serializeItem(ItemStack item) {
         if (item == null) return null;
-        byte[] bytes = item.serializeAsBytes();
-        return Base64.getEncoder().encodeToString(bytes);
+        return Base64.getEncoder().encodeToString(item.serializeAsBytes());
     }
 
-    /**
-     * Reconstructs an ItemStack from a Base64 string produced by serializeItem().
-     * Returns null if the string is null, empty, or the data is corrupt.
-     */
     public ItemStack deserializeItem(String base64) {
         if (base64 == null || base64.isEmpty()) return null;
         try {
-            byte[] bytes = Base64.getDecoder().decode(base64);
-            return ItemStack.deserializeBytes(bytes);
+            return ItemStack.deserializeBytes(Base64.getDecoder().decode(base64));
         } catch (Exception e) {
-            plugin.getLogger().log(Level.WARNING, "Failed to deserialize bounty item: " + e.getMessage());
+            plugin.getLogger().log(Level.WARNING,
+                    "Не удалось десериализовать предмет баунти: " + e.getMessage());
             return null;
         }
     }
@@ -91,26 +82,22 @@ public class BountyManager {
     // Bounty CRUD
     // -------------------------------------------------------------------------
 
-    /** Returns true if victim currently has an active bounty. */
+    /** Возвращает true, если на жертву активен баунти. */
     public boolean hasBounty(UUID victimUuid) {
         return dataConfig.contains(BOUNTIES_PATH + victimUuid);
     }
 
     /**
-     * Places a new bounty. Overwrites any previous bounty on the same victim
-     * (the old item is lost — callers should check hasBounty() first if needed).
-     *
-     * @param sponsorUuid  UUID of the player placing the bounty
-     * @param victimUuid   UUID of the target
-     * @param item         The physical ItemStack deposited as the reward
+     * Устанавливает баунти. Вызывающий обязан проверить hasBounty() перед вызовом.
+     * Перезапись — старый предмет безвозвратно теряется.
      */
     public void setBounty(UUID sponsorUuid, UUID victimUuid, ItemStack item) {
         String serialized = serializeItem(item);
         if (serialized == null) {
-            plugin.getLogger().warning("setBounty() called with a null/unserializable item — bounty not placed.");
+            plugin.getLogger().warning(
+                    "setBounty() вызван с null/несериализуемым предметом — баунти не установлен.");
             return;
         }
-
         String path = BOUNTIES_PATH + victimUuid;
         dataConfig.set(path + ".sponsor",   sponsorUuid.toString());
         dataConfig.set(path + ".item",      serialized);
@@ -120,41 +107,61 @@ public class BountyManager {
     }
 
     /**
-     * Retrieves and removes the bounty item from storage for the given victim.
-     * Returns null if no bounty exists or the item cannot be deserialized.
+     * Атомарная операция: читает ItemStack из YAML и немедленно удаляет запись.
+     * Используется при PlayerDeathEvent. Возвращает null если нет баунти или данные битые.
      */
     public ItemStack claimAndRemoveBounty(UUID victimUuid) {
         if (!hasBounty(victimUuid)) return null;
-
-        String base64 = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".item");
+        String base64  = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".item");
         ItemStack item = deserializeItem(base64);
-
-        // Remove the entire victim node whether or not deserialization succeeded,
-        // so a corrupt entry doesn't block future bounties on the same player.
+        // Удаляем узел в любом случае — битая запись не должна блокировать будущие баунти
         dataConfig.set(BOUNTIES_PATH + victimUuid.toString(), null);
         save();
-
         return item;
     }
 
     /**
-     * Cancels (deletes) a bounty without dropping the item. The deposited item
-     * is permanently lost — intentional; sponsors cannot recall a bounty mid-hunt.
+     * [NEW] Читает и десериализует предмет баунти БЕЗ удаления из хранилища.
+     * Используется GUI для отображения информации о награде в лоре головы.
+     * Возвращает null, если баунти нет или данные повреждены.
      */
+    public ItemStack getBountyItem(UUID victimUuid) {
+        if (!hasBounty(victimUuid)) return null;
+        String base64 = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".item");
+        return deserializeItem(base64);
+    }
+
+    /**
+     * [NEW] Возвращает упорядоченный список UUID всех жертв с активными баунти.
+     * Порядок = порядок вставки в YAML (хронологический).
+     * Используется browse-GUI для отображения страниц голов.
+     */
+    public List<UUID> getAllBountyVictimUuids() {
+        ConfigurationSection section = dataConfig.getConfigurationSection("bounties");
+        if (section == null) return new ArrayList<>();
+        List<UUID> result = new ArrayList<>();
+        for (String key : section.getKeys(false)) {
+            try {
+                result.add(UUID.fromString(key));
+            } catch (IllegalArgumentException ignored) {
+                // Повреждённый UUID-ключ — пропускаем
+            }
+        }
+        return result;
+    }
+
+    /** Отменяет баунти без дропа. Предмет теряется — намеренно (нельзя отозвать баунти). */
     public void cancelBounty(UUID victimUuid) {
         dataConfig.set(BOUNTIES_PATH + victimUuid.toString(), null);
         save();
     }
 
-    /**
-     * Returns a human-readable description of the bounty item for chat messages,
-     * e.g. "10x DIAMOND". Returns null if no bounty exists.
-     */
+    /** "10x DIAMOND" и т.д. Null если баунти нет. */
     public String getBountyDescription(UUID victimUuid) {
         return dataConfig.getString(BOUNTIES_PATH + victimUuid + ".itemDesc");
     }
 
-    /** Returns the UUID of whoever placed this bounty, or null if none exists. */
+    /** UUID спонсора или null. */
     public UUID getSponsorUuid(UUID victimUuid) {
         String raw = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".sponsor");
         if (raw == null) return null;

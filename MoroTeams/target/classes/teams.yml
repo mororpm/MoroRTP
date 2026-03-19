@@ -1,0 +1,7 @@
+# MoroTeams storage — do NOT edit while server is running.
+# teams:
+#   <team-name>:
+#     owner: <uuid>
+#     members:
+#       - <uuid>
+teams:

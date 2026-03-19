@@ -1,0 +1,10 @@
+# MoroWarp storage — do NOT edit while server is running.
+# warps:
+#   <name>:
+#     world: world
+#     x: 0.5
+#     y: 64.0
+#     z: 0.5
+#     yaw: 0.0
+#     pitch: 0.0
+warps:

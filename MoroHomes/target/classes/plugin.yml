@@ -1,0 +1,22 @@
+name: MoroHomes
+version: 2.0.0
+main: net.morosmp.homes.HomesPlugin
+api-version: '1.21'
+description: Multi-home system with physical Diamond upgrade economy.
+
+commands:
+  sethome:
+    description: Set a named home at your current location
+    usage: /sethome <name>
+  home:
+    description: Teleport to a named home
+    usage: /home [name]
+  delhome:
+    description: Delete a named home
+    usage: /delhome <name>
+  buyhome:
+    description: Purchase an additional home slot with physical Diamonds
+    usage: /buyhome
+  homes:
+    description: List all your set homes
+    usage: /homes

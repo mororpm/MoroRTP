@@ -1,0 +1,4 @@
+net\morosmp\teams\TeamCommand.class
+net\morosmp\teams\TeamManager.class
+net\morosmp\teams\TeamListener.class
+net\morosmp\teams\TeamsPlugin.class

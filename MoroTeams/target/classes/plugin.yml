@@ -1,0 +1,9 @@
+name: MoroTeams
+version: 1.0.0
+main: net.morosmp.teams.TeamsPlugin
+api-version: '1.21'
+description: Hardcore team system with physical Diamond cost.
+commands:
+  team:
+    description: Team management
+    usage: /team <create|invite|accept|leave|chat>

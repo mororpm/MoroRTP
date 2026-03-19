@@ -3,267 +3,564 @@ package net.morosmp.bounty;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.PrepareAnvilEvent;
+import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
- * BountyGUI — 9-slot chest-style inventory.
+ * BountyGUI — управляет тремя типами инвентарей:
  *
- * Layout (slot indices 0-8):
+ *  1. BROWSE GUI (54 слота, Double Chest)
+ *     ┌─────────────────────────────────────────────┐
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │  ← Ряды 0–4 (слоты 0–44)
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │    По 9 голов на ряд = 45/страницу
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │
+ *     │ ←НАЗАД  GL  ПОИСК  GL  СТР   GL  GL  GL →  │  ← Ряд 5 (слоты 45–53): навигация
+ *     └─────────────────────────────────────────────┘
+ *     Слот 45 = ← Назад   (только если page > 0)
+ *     Слот 47 = [ПОИСК]   (всегда)
+ *     Слот 49 = Страница X/Y (всегда)
+ *     Слот 53 = Вперёд → (только если есть следующая страница)
  *
- *  [ GLASS ][ GLASS ][ GLASS ][ GLASS ][ DEPOSIT ][ GLASS ][ GLASS ][ CONFIRM ][ CANCEL ]
- *     0        1        2        3          4         5        6         7         8
+ *  2. DEPOSIT GUI (9 слотов, Single Chest)
+ *     Открывается через /bounty create <player>. Логика из v2 без изменений.
+ *     Слот 4 = депозит, Слот 7 = подтвердить, Слот 8 = отмена.
  *
- *  Slot 4 → Deposit slot  : player places the item they want to use as the bounty reward.
- *  Slot 7 → Confirm button: locks in the deposit and writes the bounty to YAML.
- *  Slot 8 → Cancel button : closes without doing anything; returns deposited item.
+ *  3. ANVIL GUI (поиск)
+ *     Открывается кликом на [ПОИСК] внутри Browse GUI.
+ *     Игрок вводит ник → нажимает на вывод (слот 2) или закрывает анвил →
+ *     Browse GUI переоткрывается с применённым фильтром.
  *
- * One BountyGUI instance is registered as a Listener (singleton in MoroBounty).
- * A Map tracks which player is targeting which victim so multiple GUIs can be
- * open simultaneously.
+ * Singleton: один экземпляр BountyGUI регистрируется как Listener в MoroBounty.java.
  */
 public class BountyGUI implements Listener {
 
-    // Slot constants — change these to rearrange the layout
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Константы заголовков (используем stripColor для сравнения → безопасно)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    static final String BROWSE_TITLE  = ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "☠ Активные Баунти";
+    static final String DEPOSIT_TITLE = ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "Установить Баунти";
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Слоты Deposit GUI (9-slot)
+    // ═══════════════════════════════════════════════════════════════════════════
+
     private static final int DEPOSIT_SLOT  = 4;
     private static final int CONFIRM_SLOT  = 7;
     private static final int CANCEL_SLOT   = 8;
 
-    private static final String GUI_TITLE = ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "Set Bounty — Deposit Item";
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Слоты Browse GUI (54-slot, навигационный ряд 45–53)
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private final MoroBounty   plugin;
+    private static final int SLOT_PREV         = 45;
+    private static final int SLOT_SEARCH       = 47;
+    private static final int SLOT_PAGE_INFO    = 49;
+    private static final int SLOT_NEXT         = 53;
+    private static final int ITEMS_PER_PAGE    = 45;   // слоты 0–44
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // State
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private final MoroBounty    plugin;
     private final BountyManager manager;
 
-    // viewer UUID → victim UUID (tracks who is setting a bounty on whom)
-    private final Map<UUID, UUID> activeSessions = new HashMap<>();
+    /** sponsor UUID → victim UUID (для Deposit GUI) */
+    private final Map<UUID, UUID>    depositSessions = new HashMap<>();
+
+    /** player UUID → текущая страница (для Browse GUI) */
+    private final Map<UUID, Integer> pageMap         = new HashMap<>();
+
+    /** player UUID → активный фильтр поиска (null = без фильтра) */
+    private final Map<UUID, String>  filterMap       = new HashMap<>();
+
+    /** игроки, у которых открыт Anvil для поиска */
+    private final Set<UUID>          searchSessions  = new HashSet<>();
 
     public BountyGUI(MoroBounty plugin, BountyManager manager) {
         this.plugin  = plugin;
         this.manager = manager;
     }
 
-    // -------------------------------------------------------------------------
-    // Open the GUI
-    // -------------------------------------------------------------------------
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PUBLIC OPEN METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Opens the bounty-creation GUI for {@code sponsor}, targeting {@code victim}.
-     * Calling this when the sponsor already has an open session replaces the old one.
+     * Открывает Browse GUI для игрока.
+     *
+     * @param player  кто открывает
+     * @param page    0-индексированный номер страницы
+     * @param filter  строка-фильтр по нику (null или "" = показать всё)
      */
-    public void openFor(Player sponsor, Player victim) {
-        Inventory inv = Bukkit.createInventory(null, 9, GUI_TITLE);
+    public void openBrowse(Player player, int page, String filter) {
+        // 1. Получаем список всех жертв с баунти
+        List<UUID> victims = manager.getAllBountyVictimUuids();
 
-        // Fill decorative glass panes
-        ItemStack glass = makeItem(Material.GRAY_STAINED_GLASS_PANE, " ");
-        for (int i = 0; i < 9; i++) {
-            if (i != DEPOSIT_SLOT && i != CONFIRM_SLOT && i != CANCEL_SLOT) {
-                inv.setItem(i, glass);
-            }
+        // 2. Применяем фильтр поиска
+        final boolean hasFilter = filter != null && !filter.isBlank();
+        if (hasFilter) {
+            final String lf = filter.toLowerCase();
+            victims = victims.stream().filter(uuid -> {
+                OfflinePlayer op = Bukkit.getOfflinePlayer(uuid);
+                return op.getName() != null && op.getName().toLowerCase().contains(lf);
+            }).collect(Collectors.toList());
         }
 
-        // Deposit slot — left intentionally empty so the player can place their item
+        // 3. Вычисляем страницу / количество страниц
+        int totalPages = Math.max(1, (int) Math.ceil(victims.size() / (double) ITEMS_PER_PAGE));
+        page = Math.max(0, Math.min(page, totalPages - 1));
+
+        // 4. Сохраняем состояние для навигации
+        pageMap.put(player.getUniqueId(), page);
+        if (hasFilter) filterMap.put(player.getUniqueId(), filter);
+        else           filterMap.remove(player.getUniqueId());
+
+        // 5. Строим инвентарь
+        Inventory inv = Bukkit.createInventory(null, 54, BROWSE_TITLE);
+
+        // Заполняем слоты голов (0–44)
+        int start = page * ITEMS_PER_PAGE;
+        int end   = Math.min(start + ITEMS_PER_PAGE, victims.size());
+        for (int i = start; i < end; i++) {
+            inv.setItem(i - start, buildHeadItem(victims.get(i)));
+        }
+
+        // Заполняем навигационный ряд стеклом
+        ItemStack navGlass = makeItem(Material.GRAY_STAINED_GLASS_PANE, " ");
+        for (int s = 45; s < 54; s++) inv.setItem(s, navGlass);
+
+        // ← Назад
+        if (page > 0) {
+            inv.setItem(SLOT_PREV, makeItem(Material.ARROW,
+                    ChatColor.YELLOW + "← Назад",
+                    ChatColor.GRAY + "Страница " + page + " из " + totalPages));
+        }
+
+        // [ПОИСК]
+        List<String> searchLore = new ArrayList<>();
+        searchLore.add(ChatColor.GRAY + "Нажми для поиска по нику");
+        if (hasFilter) {
+            searchLore.add(ChatColor.YELLOW + "Активный фильтр: " + ChatColor.WHITE + filter);
+            searchLore.add(ChatColor.RED + "ПКМ для сброса фильтра");
+        } else {
+            searchLore.add(ChatColor.GRAY + "Фильтр не установлен");
+        }
+        inv.setItem(SLOT_SEARCH, makeItem(Material.BOOK,
+                ChatColor.AQUA + "[ПОИСК]",
+                searchLore.toArray(new String[0])));
+
+        // Страница X из Y
+        inv.setItem(SLOT_PAGE_INFO, makeItem(Material.PAPER,
+                ChatColor.AQUA + "Страница " + (page + 1) + " из " + totalPages,
+                ChatColor.GRAY + "Всего баунти: " + victims.size()));
+
+        // Вперёд →
+        if (page < totalPages - 1) {
+            inv.setItem(SLOT_NEXT, makeItem(Material.ARROW,
+                    ChatColor.YELLOW + "Вперёд →",
+                    ChatColor.GRAY + "Страница " + (page + 2) + " из " + totalPages));
+        }
+
+        player.openInventory(inv);
+    }
+
+    /**
+     * Открывает Deposit GUI для установки баунти на жертву.
+     * Вызывается из BountyCommand (/bounty create <player>).
+     */
+    public void openFor(Player sponsor, Player victim) {
+        Inventory inv = Bukkit.createInventory(null, 9, DEPOSIT_TITLE);
+
+        ItemStack glass = makeItem(Material.GRAY_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 9; i++) {
+            if (i != DEPOSIT_SLOT && i != CONFIRM_SLOT && i != CANCEL_SLOT)
+                inv.setItem(i, glass);
+        }
+
         inv.setItem(DEPOSIT_SLOT, makeItem(Material.LIME_STAINED_GLASS_PANE,
-                ChatColor.GREEN + "» Place your bounty item here «",
-                ChatColor.GRAY + "Any item works — Diamonds, Netherite, etc."));
+                ChatColor.GREEN + "» Положите предмет награды сюда «",
+                ChatColor.GRAY + "Алмазы, незерит и любые другие предметы"));
 
-        // Confirm button
         inv.setItem(CONFIRM_SLOT, makeItem(Material.EMERALD_BLOCK,
-                ChatColor.GREEN + "" + ChatColor.BOLD + "✔  CONFIRM",
-                ChatColor.GRAY + "Places the bounty on " + ChatColor.RED + victim.getName(),
-                ChatColor.GRAY + "The item in slot 5 will be removed from",
-                ChatColor.GRAY + "your inventory and locked as the reward."));
+                ChatColor.GREEN + "" + ChatColor.BOLD + "✔  ПОДТВЕРДИТЬ",
+                ChatColor.GRAY + "Установить баунти на " + ChatColor.RED + victim.getName(),
+                ChatColor.GRAY + "Предмет будет изъят из инвентаря"));
 
-        // Cancel button
         inv.setItem(CANCEL_SLOT, makeItem(Material.REDSTONE_BLOCK,
-                ChatColor.RED + "" + ChatColor.BOLD + "✘  CANCEL",
-                ChatColor.GRAY + "Closes the menu. Your item is returned."));
+                ChatColor.RED + "" + ChatColor.BOLD + "✘  ОТМЕНА",
+                ChatColor.GRAY + "Закрыть меню. Предмет возвращается."));
 
-        activeSessions.put(sponsor.getUniqueId(), victim.getUniqueId());
+        depositSessions.put(sponsor.getUniqueId(), victim.getUniqueId());
         sponsor.openInventory(inv);
     }
 
-    // -------------------------------------------------------------------------
-    // Click handler
-    // -------------------------------------------------------------------------
+    /**
+     * Открывает Anvil GUI для поиска.
+     * Вызывается внутри класса по клику на [ПОИСК].
+     */
+    private void openSearch(Player player) {
+        searchSessions.add(player.getUniqueId());
+
+        // openAnvil(location, force=true) — Paper API, доступен с 1.14+
+        InventoryView view = player.openAnvil(player.getLocation(), true);
+        if (view == null) {
+            searchSessions.remove(player.getUniqueId());
+            return;
+        }
+
+        // Кладём бумагу в слот 0 — «заготовка» для переименования (= ввод текста)
+        ItemStack seed = makeItem(Material.PAPER,
+                ChatColor.GRAY + "Введите ник игрока...",
+                ChatColor.GRAY + "Напишите ник в поле выше и",
+                ChatColor.GRAY + "нажмите на результат ▶");
+        view.getTopInventory().setItem(0, seed);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EVENT HANDLERS
+    // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
     public void onClick(InventoryClickEvent event) {
-        if (!(event.getWhoClicked() instanceof Player sponsor)) return;
-        if (!isOurGUI(event.getView().getTitle())) return;
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        String title = event.getView().getTitle();
 
-        int slot = event.getRawSlot();
-
-        // --- Slots that are NOT the deposit slot must be completely locked ---
-        if (slot != DEPOSIT_SLOT) {
+        // ── Browse GUI ────────────────────────────────────────────────────────
+        if (isBrowseGUI(title)) {
             event.setCancelled(true);
-        }
+            int slot = event.getRawSlot();
 
-        // Prevent shift-clicking items FROM player inventory INTO our GUI to
-        // bypass the deposit-slot restriction
-        if (slot >= 9 && event.isShiftClick()) {
-            event.setCancelled(true);
+            // Клики в нижнем инвентаре игрока внутри Browse GUI — игнорируем
+            if (slot < 0 || slot >= 54) return;
+
+            int     page   = pageMap.getOrDefault(player.getUniqueId(), 0);
+            String  filter = filterMap.get(player.getUniqueId());
+
+            switch (slot) {
+                case SLOT_PREV -> openBrowse(player, page - 1, filter);
+
+                case SLOT_NEXT -> openBrowse(player, page + 1, filter);
+
+                case SLOT_SEARCH -> {
+                    boolean isRightClick = event.isRightClick();
+                    player.closeInventory();
+                    Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                        if (isRightClick && filter != null) {
+                            // ПКМ — сбрасываем фильтр, возвращаем на 0 страницу
+                            openBrowse(player, 0, null);
+                        } else {
+                            // ЛКМ — открываем поиск через Anvil GUI
+                            openSearch(player);
+                        }
+                    }, 1L);
+                }
+
+                case SLOT_PAGE_INFO -> { /* информационный слот, действий нет */ }
+
+                default -> { /* клик по голове — действий нет */ }
+            }
             return;
         }
 
-        UUID victimUuid = activeSessions.get(sponsor.getUniqueId());
-        if (victimUuid == null) return;
+        // ── Deposit GUI ───────────────────────────────────────────────────────
+        if (isDepositGUI(title)) {
+            int slot = event.getRawSlot();
 
-        // --- CONFIRM ---
-        if (slot == CONFIRM_SLOT) {
-            handleConfirm(sponsor, victimUuid, event.getView().getTopInventory());
+            // Любой слот кроме депозитного — блокируем
+            if (slot != DEPOSIT_SLOT) event.setCancelled(true);
+
+            // Блокируем shift-клик из инвентаря игрока в GUI (защита от дупа)
+            if (slot >= 9 && event.isShiftClick()) {
+                event.setCancelled(true);
+                return;
+            }
+
+            UUID victimUuid = depositSessions.get(player.getUniqueId());
+            if (victimUuid == null) return;
+
+            if (slot == CONFIRM_SLOT) {
+                handleConfirm(player, victimUuid, event.getView().getTopInventory());
+            } else if (slot == CANCEL_SLOT) {
+                player.closeInventory(); // onClose вернёт предмет
+            }
             return;
         }
 
-        // --- CANCEL ---
-        if (slot == CANCEL_SLOT) {
-            sponsor.closeInventory(); // onClose() will return any deposited item
+        // ── Anvil (поиск) ─────────────────────────────────────────────────────
+        if (searchSessions.contains(player.getUniqueId())
+                && event.getInventory() instanceof AnvilInventory anvilInv) {
+
+            // Слот 2 = выходной слот Anvil — игрок «подтверждает» ввод
+            if (event.getRawSlot() == 2) {
+                event.setCancelled(true);
+                String query = anvilInv.getRenameText();
+                searchSessions.remove(player.getUniqueId());
+                player.closeInventory();
+                final String q = (query != null && !query.isBlank()) ? query.trim() : null;
+                Bukkit.getScheduler().runTaskLater(plugin,
+                        () -> openBrowse(player, 0, q), 1L);
+            }
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Drag handler — prevent dragging into non-deposit slots
-    // -------------------------------------------------------------------------
 
     @EventHandler
     public void onDrag(InventoryDragEvent event) {
         if (!(event.getWhoClicked() instanceof Player)) return;
-        if (!isOurGUI(event.getView().getTitle())) return;
+        String title = event.getView().getTitle();
 
-        // If ANY of the dragged-into slots are inside our 9-slot GUI and are NOT
-        // the deposit slot, cancel the entire drag.
-        for (int slot : event.getRawSlots()) {
-            if (slot < 9 && slot != DEPOSIT_SLOT) {
-                event.setCancelled(true);
-                return;
+        if (isBrowseGUI(title)) {
+            event.setCancelled(true);
+            return;
+        }
+
+        if (isDepositGUI(title)) {
+            // В Deposit GUI разрешаем перетаскивание только в слот депозита
+            for (int slot : event.getRawSlots()) {
+                if (slot < 9 && slot != DEPOSIT_SLOT) {
+                    event.setCancelled(true);
+                    return;
+                }
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Close handler — always return whatever is in the deposit slot
-    // -------------------------------------------------------------------------
-
     @EventHandler
     public void onClose(InventoryCloseEvent event) {
-        if (!(event.getPlayer() instanceof Player sponsor)) return;
-        if (!isOurGUI(event.getView().getTitle())) return;
+        if (!(event.getPlayer() instanceof Player player)) return;
+        String title = event.getView().getTitle();
 
-        activeSessions.remove(sponsor.getUniqueId());
+        // ── Deposit GUI закрыт — возвращаем предмет из депозитного слота ─────
+        if (isDepositGUI(title)) {
+            depositSessions.remove(player.getUniqueId());
+            ItemStack leftover = event.getInventory().getItem(DEPOSIT_SLOT);
+            if (isRealItem(leftover)) {
+                event.getInventory().setItem(DEPOSIT_SLOT, null);
+                returnItem(player, leftover);
+            }
+            return;
+        }
 
-        // Return the deposit-slot item to the player's inventory if they closed
-        // without confirming (or if confirm already cleared the slot — safe no-op).
-        ItemStack leftover = event.getInventory().getItem(DEPOSIT_SLOT);
-        if (isRealItem(leftover)) {
-            returnItem(sponsor, leftover);
-            event.getInventory().setItem(DEPOSIT_SLOT, null);
+        // ── Browse GUI закрыт — pageMap/filterMap оставляем (resume при реоткрытии) ─
+
+        // ── Anvil закрыт без подтверждения — всё равно применяем запрос ──────
+        if (searchSessions.contains(player.getUniqueId())
+                && event.getInventory() instanceof AnvilInventory anvilInv) {
+
+            searchSessions.remove(player.getUniqueId());
+            String query = anvilInv.getRenameText();
+
+            // Не применяем дефолтный placeholder как фильтр
+            final boolean isPlaceholder = query != null
+                    && ChatColor.stripColor(query).equalsIgnoreCase("Введите ник игрока...");
+            final String q = (!isPlaceholder && query != null && !query.isBlank())
+                    ? query.trim() : null;
+
+            Bukkit.getScheduler().runTaskLater(plugin,
+                    () -> openBrowse(player, 0, q), 1L);
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Confirm logic
-    // -------------------------------------------------------------------------
+    /**
+     * PrepareAnvilEvent: делает поиск бесплатным (XP = 0) и всегда предоставляет
+     * результат в выходном слоте, чтобы игрок мог нажать на него.
+     */
+    @EventHandler
+    public void onPrepareAnvil(PrepareAnvilEvent event) {
+        if (!(event.getView().getPlayer() instanceof Player player)) return;
+        if (!searchSessions.contains(player.getUniqueId())) return;
+
+        // Стоимость = 0 (не тратим XP)
+        event.getInventory().setRepairCost(0);
+
+        // Строим result-предмет из слота 0 с текущим текстом в поле
+        ItemStack base = event.getInventory().getItem(0);
+        if (base == null) return;
+
+        String renameText = event.getInventory().getRenameText();
+        boolean hasQuery  = renameText != null && !renameText.isBlank();
+
+        ItemStack result = base.clone();
+        ItemMeta  meta   = result.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(hasQuery
+                    ? ChatColor.AQUA + renameText
+                    : ChatColor.GRAY + "Введите ник...");
+            meta.setLore(hasQuery
+                    ? List.of(ChatColor.GREEN + "Нажми, чтобы найти: " + ChatColor.WHITE + renameText)
+                    : List.of(ChatColor.GRAY + "Введите ник в поле выше"));
+            result.setItemMeta(meta);
+        }
+        event.setResult(result);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE: Deposit confirm
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void handleConfirm(Player sponsor, UUID victimUuid, Inventory gui) {
         ItemStack deposited = gui.getItem(DEPOSIT_SLOT);
 
-        // Validate: deposit slot must contain a real item, not a placeholder pane
         if (!isRealItem(deposited)) {
-            sponsor.sendMessage(ChatColor.RED + "[MoroBounty] Place the item you want to use as the bounty reward in the center slot first!");
+            sponsor.sendMessage(ChatColor.RED
+                    + "[MoroBounty] Сначала положите предмет-награду в центральный слот!");
             return;
         }
 
-        // Validate: sponsor must still have that item in their inventory.
-        // This prevents a duplication exploit where the player quickly swaps the
-        // item out of their inventory between placing it and clicking confirm.
+        // Антидуп: проверяем, что предмет всё ещё есть в инвентаре
         if (!sponsor.getInventory().containsAtLeast(deposited, deposited.getAmount())) {
-            sponsor.sendMessage(ChatColor.RED + "[MoroBounty] You no longer have that item in your inventory!");
+            sponsor.sendMessage(ChatColor.RED + "[MoroBounty] У вас больше нет этого предмета!");
             gui.setItem(DEPOSIT_SLOT, null);
             return;
         }
 
-        // Check if target already has a bounty
         if (manager.hasBounty(victimUuid)) {
-            sponsor.sendMessage(ChatColor.RED + "[MoroBounty] That player already has an active bounty!");
-            // Return the item and close
+            sponsor.sendMessage(ChatColor.RED
+                    + "[MoroBounty] На этого игрока уже установлен активный баунти!");
             returnItem(sponsor, deposited);
             gui.setItem(DEPOSIT_SLOT, null);
             sponsor.closeInventory();
             return;
         }
 
-        // ---- All checks passed — commit the bounty ----
-
-        // 1. Remove the item physically from the sponsor's inventory
-        //    removeItem() handles stacks correctly (e.g. 10 diamonds from multiple slots)
+        // ── Всё ок — фиксируем баунти ────────────────────────────────────────
         sponsor.getInventory().removeItem(deposited.clone());
-
-        // 2. Clear the GUI deposit slot (item is now "locked in")
         gui.setItem(DEPOSIT_SLOT, null);
-
-        // 3. Persist to bounties.yml
         manager.setBounty(sponsor.getUniqueId(), victimUuid, deposited.clone());
 
-        // 4. Feedback
         String victimName = Bukkit.getOfflinePlayer(victimUuid).getName();
-        if (victimName == null) victimName = victimUuid.toString();
+        if (victimName == null) victimName = victimUuid.toString().substring(0, 8) + "...";
 
         sponsor.sendMessage(ChatColor.GREEN + "[MoroBounty] " + ChatColor.WHITE
-                + "Bounty placed on " + ChatColor.RED + victimName
-                + ChatColor.WHITE + "! Reward: " + ChatColor.GOLD
+                + "Баунти установлен на " + ChatColor.RED + victimName
+                + ChatColor.WHITE + "! Награда: " + ChatColor.GOLD
                 + deposited.getAmount() + "x " + deposited.getType().name());
 
-        // 5. Close the GUI (onClose will find an empty deposit slot — no double-return)
         sponsor.closeInventory();
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    /** Checks if the inventory title belongs to our GUI (color-stripped comparison). */
-    private boolean isOurGUI(String title) {
-        return ChatColor.stripColor(title).equals(ChatColor.stripColor(GUI_TITLE));
-    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE: Item builders
+    // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Returns true if the ItemStack is non-null, not AIR, and not one of the
-     * decorative glass panes used as fillers.
+     * Строит голову жертвы с полной информацией о баунти.
+     * Лор: "§cЦЕНА БОШКИ: §f<кол-во> §b<тип предмета>"
      */
-    private boolean isRealItem(ItemStack item) {
-        if (item == null || item.getType() == Material.AIR) return false;
-        // Reject decorative glass panes (they are our own placeholders)
-        return item.getType() != Material.GRAY_STAINED_GLASS_PANE
-            && item.getType() != Material.LIME_STAINED_GLASS_PANE;
+    private ItemStack buildHeadItem(UUID victimUuid) {
+        OfflinePlayer op   = Bukkit.getOfflinePlayer(victimUuid);
+        String victimName  = op.getName() != null
+                ? op.getName()
+                : victimUuid.toString().substring(0, 8) + "...";
+
+        ItemStack head = new ItemStack(Material.PLAYER_HEAD);
+        SkullMeta meta = (SkullMeta) head.getItemMeta();
+        if (meta == null) return head;
+
+        meta.setOwningPlayer(op);
+        meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + "☠ " + victimName);
+
+        // Строим лор из десериализованного предмета
+        List<String> lore = new ArrayList<>();
+        ItemStack rewardItem = manager.getBountyItem(victimUuid);
+        if (rewardItem != null) {
+            lore.add(ChatColor.RED + "ЦЕНА БОШКИ: "
+                    + ChatColor.WHITE + rewardItem.getAmount()
+                    + " " + ChatColor.AQUA + prettyMaterial(rewardItem.getType().name()));
+
+            // Если у предмета есть кастомное имя — показываем тоже
+            if (rewardItem.hasItemMeta() && rewardItem.getItemMeta().hasDisplayName()) {
+                lore.add(ChatColor.GRAY + "(" + rewardItem.getItemMeta().getDisplayName()
+                        + ChatColor.GRAY + ")");
+            }
+        } else {
+            // Fallback на текстовое описание из YAML (быстро, без десериализации)
+            String desc = manager.getBountyDescription(victimUuid);
+            lore.add(ChatColor.RED + "ЦЕНА БОШКИ: "
+                    + ChatColor.AQUA + (desc != null ? desc : "???"));
+        }
+        lore.add(ChatColor.DARK_GRAY + "ID: " + victimUuid.toString().substring(0, 8) + "...");
+
+        meta.setLore(lore);
+        head.setItemMeta(meta);
+        return head;
     }
 
-    /** Gives an item back to the player, dropping it at their feet if inventory is full. */
-    private void returnItem(Player player, ItemStack item) {
-        if (item == null || item.getType() == Material.AIR) return;
-        Map<Integer, ItemStack> overflow = player.getInventory().addItem(item.clone());
-        overflow.values().forEach(leftover ->
-                player.getWorld().dropItemNaturally(player.getLocation(), leftover));
+    /** "DIAMOND_SWORD" → "Diamond Sword" (для красивого отображения в лоре) */
+    private String prettyMaterial(String raw) {
+        String[] parts = raw.split("_");
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (!part.isEmpty()) {
+                sb.append(Character.toUpperCase(part.charAt(0)))
+                  .append(part.substring(1).toLowerCase())
+                  .append(" ");
+            }
+        }
+        return sb.toString().trim();
     }
 
-    /** Convenience builder for GUI display items. */
     private ItemStack makeItem(Material material, String name, String... lore) {
         ItemStack item = new ItemStack(material);
-        ItemMeta meta = item.getItemMeta();
+        ItemMeta  meta = item.getItemMeta();
         if (meta == null) return item;
         meta.setDisplayName(name);
         if (lore.length > 0) meta.setLore(List.of(lore));
         item.setItemMeta(meta);
         return item;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE: Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Сравнение без цветовых кодов — безопасно для любых вариаций § в заголовках. */
+    private boolean isBrowseGUI(String title) {
+        return ChatColor.stripColor(title)
+                .equals(ChatColor.stripColor(BROWSE_TITLE));
+    }
+
+    private boolean isDepositGUI(String title) {
+        return ChatColor.stripColor(title)
+                .equals(ChatColor.stripColor(DEPOSIT_TITLE));
+    }
+
+    /** true = реальный предмет, а не стеклянный placeholder */
+    private boolean isRealItem(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) return false;
+        return item.getType() != Material.GRAY_STAINED_GLASS_PANE
+            && item.getType() != Material.LIME_STAINED_GLASS_PANE;
+    }
+
+    /** Возвращает предмет в инвентарь; если места нет — дропает у ног. */
+    private void returnItem(Player player, ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) return;
+        Map<Integer, ItemStack> overflow = player.getInventory().addItem(item.clone());
+        overflow.values().forEach(l ->
+                player.getWorld().dropItemNaturally(player.getLocation(), l));
     }
 }

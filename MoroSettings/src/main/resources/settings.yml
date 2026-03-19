@@ -1,0 +1,6 @@
+# MoroSettings storage — do NOT edit while server is running.
+# settings:
+#   <player-uuid>:
+#     pm-enabled: true
+#     kill-sounds: true
+settings:

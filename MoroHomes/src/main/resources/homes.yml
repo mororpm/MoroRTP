@@ -1,0 +1,15 @@
+# MoroHomes storage — do NOT edit while server is running.
+#
+# Structure:
+#   homes:
+#     <player-uuid>:
+#       max-homes: 1          ← unlocked slots (default from config)
+#       list:
+#         <home-name>:
+#           world: world
+#           x: 100.5
+#           y: 64.0
+#           z: 200.5
+#           yaw: 0.0
+#           pitch: 0.0
+homes:

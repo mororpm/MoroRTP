@@ -1,0 +1,4 @@
+net\morosmp\homes\HomeCommand.class
+net\morosmp\homes\HomesPlugin.class
+net\morosmp\homes\HomeManager.class
+net\morosmp\homes\BuyHomeCommand.class

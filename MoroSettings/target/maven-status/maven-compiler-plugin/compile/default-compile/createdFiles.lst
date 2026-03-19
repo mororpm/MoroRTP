@@ -1,0 +1,5 @@
+net\morosmp\settings\SettingsGUI.class
+net\morosmp\settings\MsgCommand.class
+net\morosmp\settings\SettingsPlugin.class
+net\morosmp\settings\SettingsCommand.class
+net\morosmp\settings\SettingsManager.class
