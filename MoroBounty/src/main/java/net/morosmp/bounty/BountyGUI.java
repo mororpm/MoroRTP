@@ -28,44 +28,44 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * BountyGUI — управляет тремя типами инвентарей:
+ * BountyGUI — controls three inventory types:
  *
- *  1. BROWSE GUI (54 слота, Double Chest)
+ *  1. BROWSE GUI (54 slots, double chest)
  *     ┌─────────────────────────────────────────────┐
- *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │  ← Ряды 0–4 (слоты 0–44)
- *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │    По 9 голов на ряд = 45/страницу
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │  ← Rows 0-4 (slots 0-44)
+ *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │    9 heads per row = 45/page
  *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │
  *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │
  *     │  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD  HEAD   │
- *     │ ←НАЗАД  GL  ПОИСК  GL  СТР   GL  GL  GL →  │  ← Ряд 5 (слоты 45–53): навигация
+ *     │ ←BACK   GL  SEARCH GL  PAGE  GL  GL  GL →  │  ← Row 5 (slots 45-53): navigation
  *     └─────────────────────────────────────────────┘
- *     Слот 45 = ← Назад   (только если page > 0)
- *     Слот 47 = [ПОИСК]   (всегда)
- *     Слот 49 = Страница X/Y (всегда)
- *     Слот 53 = Вперёд → (только если есть следующая страница)
+ *     Slot 45 = ← Back      (only if page > 0)
+ *     Slot 47 = [SEARCH]    (always)
+ *     Slot 49 = Page X/Y    (always)
+ *     Slot 53 = Next →      (only if next page exists)
  *
- *  2. DEPOSIT GUI (9 слотов, Single Chest)
- *     Открывается через /bounty create <player>. Логика из v2 без изменений.
- *     Слот 4 = депозит, Слот 7 = подтвердить, Слот 8 = отмена.
+ *  2. DEPOSIT GUI (9 slots, single chest)
+ *     Opened via /bounty create <player>. v2 logic preserved.
+ *     Slot 4 = deposit, Slot 7 = confirm, Slot 8 = cancel.
  *
- *  3. ANVIL GUI (поиск)
- *     Открывается кликом на [ПОИСК] внутри Browse GUI.
- *     Игрок вводит ник → нажимает на вывод (слот 2) или закрывает анвил →
- *     Browse GUI переоткрывается с применённым фильтром.
+ *  3. ANVIL GUI (search)
+ *     Opened by clicking [SEARCH] inside Browse GUI.
+ *     Player enters a nickname -> clicks result (slot 2) or closes anvil ->
+ *     Browse GUI reopens with the applied filter.
  *
- * Singleton: один экземпляр BountyGUI регистрируется как Listener в MoroBounty.java.
+ * Singleton: one BountyGUI instance is registered as Listener in MoroBounty.java.
  */
 public class BountyGUI implements Listener {
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Константы заголовков (используем stripColor для сравнения → безопасно)
+    // Title constants (stripColor comparison keeps matching safe)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    static final String BROWSE_TITLE  = ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "☠ Активные Баунти";
-    static final String DEPOSIT_TITLE = ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "Установить Баунти";
+    static final String BROWSE_TITLE  = ChatColor.DARK_PURPLE + "☠ ACTIVE BOUNTIES";
+    static final String DEPOSIT_TITLE = ChatColor.DARK_PURPLE + "PLACE BOUNTY";
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Слоты Deposit GUI (9-slot)
+    // Deposit GUI slots (9-slot)
     // ═══════════════════════════════════════════════════════════════════════════
 
     private static final int DEPOSIT_SLOT  = 4;
@@ -73,14 +73,14 @@ public class BountyGUI implements Listener {
     private static final int CANCEL_SLOT   = 8;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Слоты Browse GUI (54-slot, навигационный ряд 45–53)
+    // Browse GUI slots (54-slot, navigation row 45-53)
     // ═══════════════════════════════════════════════════════════════════════════
 
     private static final int SLOT_PREV         = 45;
     private static final int SLOT_SEARCH       = 47;
     private static final int SLOT_PAGE_INFO    = 49;
     private static final int SLOT_NEXT         = 53;
-    private static final int ITEMS_PER_PAGE    = 45;   // слоты 0–44
+    private static final int ITEMS_PER_PAGE    = 45;   // slots 0-44
 
     // ═══════════════════════════════════════════════════════════════════════════
     // State
@@ -89,16 +89,16 @@ public class BountyGUI implements Listener {
     private final MoroBounty    plugin;
     private final BountyManager manager;
 
-    /** sponsor UUID → victim UUID (для Deposit GUI) */
+    /** sponsor UUID -> victim UUID (Deposit GUI) */
     private final Map<UUID, UUID>    depositSessions = new HashMap<>();
 
-    /** player UUID → текущая страница (для Browse GUI) */
+    /** player UUID -> current page (Browse GUI) */
     private final Map<UUID, Integer> pageMap         = new HashMap<>();
 
-    /** player UUID → активный фильтр поиска (null = без фильтра) */
+    /** player UUID -> active search filter (null = no filter) */
     private final Map<UUID, String>  filterMap       = new HashMap<>();
 
-    /** игроки, у которых открыт Anvil для поиска */
+    /** players currently using an anvil search session */
     private final Set<UUID>          searchSessions  = new HashSet<>();
 
     public BountyGUI(MoroBounty plugin, BountyManager manager) {
@@ -111,17 +111,17 @@ public class BountyGUI implements Listener {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Открывает Browse GUI для игрока.
+     * Opens Browse GUI for player.
      *
-     * @param player  кто открывает
-     * @param page    0-индексированный номер страницы
-     * @param filter  строка-фильтр по нику (null или "" = показать всё)
+     * @param player player opening GUI
+     * @param page zero-based page index
+     * @param filter name filter string (null or "" = show all)
      */
     public void openBrowse(Player player, int page, String filter) {
-        // 1. Получаем список всех жертв с баунти
+        // 1) Fetch all victims with active bounties
         List<UUID> victims = manager.getAllBountyVictimUuids();
 
-        // 2. Применяем фильтр поиска
+        // 2) Apply search filter
         final boolean hasFilter = filter != null && !filter.isBlank();
         if (hasFilter) {
             final String lf = filter.toLowerCase();
@@ -131,67 +131,67 @@ public class BountyGUI implements Listener {
             }).collect(Collectors.toList());
         }
 
-        // 3. Вычисляем страницу / количество страниц
+        // 3) Calculate page bounds
         int totalPages = Math.max(1, (int) Math.ceil(victims.size() / (double) ITEMS_PER_PAGE));
         page = Math.max(0, Math.min(page, totalPages - 1));
 
-        // 4. Сохраняем состояние для навигации
+        // 4) Save navigation state
         pageMap.put(player.getUniqueId(), page);
         if (hasFilter) filterMap.put(player.getUniqueId(), filter);
         else           filterMap.remove(player.getUniqueId());
 
-        // 5. Строим инвентарь
+        // 5) Build inventory
         Inventory inv = Bukkit.createInventory(null, 54, BROWSE_TITLE);
 
-        // Заполняем слоты голов (0–44)
+        // Fill head slots (0-44)
         int start = page * ITEMS_PER_PAGE;
         int end   = Math.min(start + ITEMS_PER_PAGE, victims.size());
         for (int i = start; i < end; i++) {
             inv.setItem(i - start, buildHeadItem(victims.get(i)));
         }
 
-        // Заполняем навигационный ряд стеклом
+        // Fill navigation row with glass
         ItemStack navGlass = makeItem(Material.GRAY_STAINED_GLASS_PANE, " ");
         for (int s = 45; s < 54; s++) inv.setItem(s, navGlass);
 
-        // ← Назад
+        // <- Back
         if (page > 0) {
             inv.setItem(SLOT_PREV, makeItem(Material.ARROW,
-                    ChatColor.YELLOW + "← Назад",
-                    ChatColor.GRAY + "Страница " + page + " из " + totalPages));
+                    ChatColor.YELLOW + "← BACK",
+                    ChatColor.GRAY + "Page " + page + " of " + totalPages));
         }
 
-        // [ПОИСК]
+        // [SEARCH]
         List<String> searchLore = new ArrayList<>();
-        searchLore.add(ChatColor.GRAY + "Нажми для поиска по нику");
+        searchLore.add(ChatColor.GRAY + "Click to search by player name");
         if (hasFilter) {
-            searchLore.add(ChatColor.YELLOW + "Активный фильтр: " + ChatColor.WHITE + filter);
-            searchLore.add(ChatColor.RED + "ПКМ для сброса фильтра");
+            searchLore.add(ChatColor.YELLOW + "Active filter: " + ChatColor.WHITE + filter);
+            searchLore.add(ChatColor.RED + "Right-click to clear filter");
         } else {
-            searchLore.add(ChatColor.GRAY + "Фильтр не установлен");
+            searchLore.add(ChatColor.GRAY + "No filter applied");
         }
         inv.setItem(SLOT_SEARCH, makeItem(Material.BOOK,
-                ChatColor.AQUA + "[ПОИСК]",
+                ChatColor.AQUA + "[SEARCH]",
                 searchLore.toArray(new String[0])));
 
-        // Страница X из Y
+        // Page X of Y
         inv.setItem(SLOT_PAGE_INFO, makeItem(Material.PAPER,
-                ChatColor.AQUA + "Страница " + (page + 1) + " из " + totalPages,
-                ChatColor.GRAY + "Всего баунти: " + victims.size()));
+                ChatColor.AQUA + "PAGE " + (page + 1) + " / " + totalPages,
+                ChatColor.GRAY + "Total bounties: " + victims.size()));
 
-        // Вперёд →
+        // Next ->
         if (page < totalPages - 1) {
             inv.setItem(SLOT_NEXT, makeItem(Material.ARROW,
-                    ChatColor.YELLOW + "Вперёд →",
-                    ChatColor.GRAY + "Страница " + (page + 2) + " из " + totalPages));
+                    ChatColor.YELLOW + "NEXT →",
+                    ChatColor.GRAY + "Page " + (page + 2) + " of " + totalPages));
         }
 
         player.openInventory(inv);
     }
 
     /**
-     * Открывает Deposit GUI для установки баунти на жертву.
-     * Вызывается из BountyCommand (/bounty create <player>).
+     * Opens Deposit GUI for placing bounty on victim.
+     * Called from BountyCommand (/bounty create <player>).
      */
     public void openFor(Player sponsor, Player victim) {
         Inventory inv = Bukkit.createInventory(null, 9, DEPOSIT_TITLE);
@@ -203,41 +203,41 @@ public class BountyGUI implements Listener {
         }
 
         inv.setItem(DEPOSIT_SLOT, makeItem(Material.LIME_STAINED_GLASS_PANE,
-                ChatColor.GREEN + "» Положите предмет награды сюда «",
-                ChatColor.GRAY + "Алмазы, незерит и любые другие предметы"));
+                ChatColor.GREEN + "» DROP REWARD ITEM HERE «",
+                ChatColor.GRAY + "Diamonds, Netherite, or any item"));
 
         inv.setItem(CONFIRM_SLOT, makeItem(Material.EMERALD_BLOCK,
-                ChatColor.GREEN + "" + ChatColor.BOLD + "✔  ПОДТВЕРДИТЬ",
-                ChatColor.GRAY + "Установить баунти на " + ChatColor.RED + victim.getName(),
-                ChatColor.GRAY + "Предмет будет изъят из инвентаря"));
+                ChatColor.GREEN + "✔  CONFIRM",
+                ChatColor.GRAY + "Place bounty on " + ChatColor.RED + victim.getName(),
+                ChatColor.GRAY + "Item will be removed from your inventory"));
 
         inv.setItem(CANCEL_SLOT, makeItem(Material.REDSTONE_BLOCK,
-                ChatColor.RED + "" + ChatColor.BOLD + "✘  ОТМЕНА",
-                ChatColor.GRAY + "Закрыть меню. Предмет возвращается."));
+                ChatColor.RED + "✘  CANCEL",
+                ChatColor.GRAY + "Close menu. Item will be returned."));
 
         depositSessions.put(sponsor.getUniqueId(), victim.getUniqueId());
         sponsor.openInventory(inv);
     }
 
     /**
-     * Открывает Anvil GUI для поиска.
-     * Вызывается внутри класса по клику на [ПОИСК].
+     * Opens Anvil GUI for search.
+     * Called internally when [SEARCH] is clicked.
      */
     private void openSearch(Player player) {
         searchSessions.add(player.getUniqueId());
 
-        // openAnvil(location, force=true) — Paper API, доступен с 1.14+
+        // openAnvil(location, force=true) — Paper API, available since 1.14+
         InventoryView view = player.openAnvil(player.getLocation(), true);
         if (view == null) {
             searchSessions.remove(player.getUniqueId());
             return;
         }
 
-        // Кладём бумагу в слот 0 — «заготовка» для переименования (= ввод текста)
+        // Put paper in slot 0 as rename template (= text input seed)
         ItemStack seed = makeItem(Material.PAPER,
-                ChatColor.GRAY + "Введите ник игрока...",
-                ChatColor.GRAY + "Напишите ник в поле выше и",
-                ChatColor.GRAY + "нажмите на результат ▶");
+                ChatColor.GRAY + "Enter player name...",
+                ChatColor.GRAY + "Type a name in the top field and",
+                ChatColor.GRAY + "click the output item ▶");
         view.getTopInventory().setItem(0, seed);
     }
 
@@ -255,7 +255,7 @@ public class BountyGUI implements Listener {
             event.setCancelled(true);
             int slot = event.getRawSlot();
 
-            // Клики в нижнем инвентаре игрока внутри Browse GUI — игнорируем
+            // Ignore clicks in player's bottom inventory while Browse GUI is open
             if (slot < 0 || slot >= 54) return;
 
             int     page   = pageMap.getOrDefault(player.getUniqueId(), 0);
@@ -271,18 +271,18 @@ public class BountyGUI implements Listener {
                     player.closeInventory();
                     Bukkit.getScheduler().runTaskLater(plugin, () -> {
                         if (isRightClick && filter != null) {
-                            // ПКМ — сбрасываем фильтр, возвращаем на 0 страницу
+                            // Right-click: clear filter and go back to page 0
                             openBrowse(player, 0, null);
                         } else {
-                            // ЛКМ — открываем поиск через Anvil GUI
+                            // Left-click: open Anvil search
                             openSearch(player);
                         }
                     }, 1L);
                 }
 
-                case SLOT_PAGE_INFO -> { /* информационный слот, действий нет */ }
+                case SLOT_PAGE_INFO -> { /* info slot, no action */ }
 
-                default -> { /* клик по голове — действий нет */ }
+                default -> { /* head click: no action */ }
             }
             return;
         }
@@ -291,10 +291,10 @@ public class BountyGUI implements Listener {
         if (isDepositGUI(title)) {
             int slot = event.getRawSlot();
 
-            // Любой слот кроме депозитного — блокируем
+            // Block every slot except deposit slot
             if (slot != DEPOSIT_SLOT) event.setCancelled(true);
 
-            // Блокируем shift-клик из инвентаря игрока в GUI (защита от дупа)
+            // Block shift-click from player inventory into GUI (dupe protection)
             if (slot >= 9 && event.isShiftClick()) {
                 event.setCancelled(true);
                 return;
@@ -306,16 +306,16 @@ public class BountyGUI implements Listener {
             if (slot == CONFIRM_SLOT) {
                 handleConfirm(player, victimUuid, event.getView().getTopInventory());
             } else if (slot == CANCEL_SLOT) {
-                player.closeInventory(); // onClose вернёт предмет
+                player.closeInventory(); // onClose returns item
             }
             return;
         }
 
-        // ── Anvil (поиск) ─────────────────────────────────────────────────────
+        // ── Anvil (search) ────────────────────────────────────────────────────
         if (searchSessions.contains(player.getUniqueId())
                 && event.getInventory() instanceof AnvilInventory anvilInv) {
 
-            // Слот 2 = выходной слот Anvil — игрок «подтверждает» ввод
+            // Slot 2 = Anvil output slot; confirms input
             if (event.getRawSlot() == 2) {
                 event.setCancelled(true);
                 String query = anvilInv.getRenameText();
@@ -339,7 +339,7 @@ public class BountyGUI implements Listener {
         }
 
         if (isDepositGUI(title)) {
-            // В Deposit GUI разрешаем перетаскивание только в слот депозита
+            // In Deposit GUI allow dragging only into deposit slot
             for (int slot : event.getRawSlots()) {
                 if (slot < 9 && slot != DEPOSIT_SLOT) {
                     event.setCancelled(true);
@@ -354,7 +354,7 @@ public class BountyGUI implements Listener {
         if (!(event.getPlayer() instanceof Player player)) return;
         String title = event.getView().getTitle();
 
-        // ── Deposit GUI закрыт — возвращаем предмет из депозитного слота ─────
+        // ── Deposit GUI closed — return item from deposit slot ────────────────
         if (isDepositGUI(title)) {
             depositSessions.remove(player.getUniqueId());
             ItemStack leftover = event.getInventory().getItem(DEPOSIT_SLOT);
@@ -365,18 +365,18 @@ public class BountyGUI implements Listener {
             return;
         }
 
-        // ── Browse GUI закрыт — pageMap/filterMap оставляем (resume при реоткрытии) ─
+        // ── Browse GUI closed — keep pageMap/filterMap (resume on reopen) ─────
 
-        // ── Anvil закрыт без подтверждения — всё равно применяем запрос ──────
+        // ── Anvil closed without confirm — still apply current query ──────────
         if (searchSessions.contains(player.getUniqueId())
                 && event.getInventory() instanceof AnvilInventory anvilInv) {
 
             searchSessions.remove(player.getUniqueId());
             String query = anvilInv.getRenameText();
 
-            // Не применяем дефолтный placeholder как фильтр
+            // Do not apply default placeholder text as filter
             final boolean isPlaceholder = query != null
-                    && ChatColor.stripColor(query).equalsIgnoreCase("Введите ник игрока...");
+                    && ChatColor.stripColor(query).equalsIgnoreCase("Enter player name...");
             final String q = (!isPlaceholder && query != null && !query.isBlank())
                     ? query.trim() : null;
 
@@ -386,18 +386,18 @@ public class BountyGUI implements Listener {
     }
 
     /**
-     * PrepareAnvilEvent: делает поиск бесплатным (XP = 0) и всегда предоставляет
-     * результат в выходном слоте, чтобы игрок мог нажать на него.
+     * PrepareAnvilEvent: makes search free (XP = 0) and always provides
+     * an output item so the player can click to confirm.
      */
     @EventHandler
     public void onPrepareAnvil(PrepareAnvilEvent event) {
         if (!(event.getView().getPlayer() instanceof Player player)) return;
         if (!searchSessions.contains(player.getUniqueId())) return;
 
-        // Стоимость = 0 (не тратим XP)
+        // Cost = 0 (no XP usage)
         event.getInventory().setRepairCost(0);
 
-        // Строим result-предмет из слота 0 с текущим текстом в поле
+        // Build result item from slot 0 with current input text
         ItemStack base = event.getInventory().getItem(0);
         if (base == null) return;
 
@@ -409,10 +409,10 @@ public class BountyGUI implements Listener {
         if (meta != null) {
             meta.setDisplayName(hasQuery
                     ? ChatColor.AQUA + renameText
-                    : ChatColor.GRAY + "Введите ник...");
+                    : ChatColor.GRAY + "Enter name...");
             meta.setLore(hasQuery
-                    ? List.of(ChatColor.GREEN + "Нажми, чтобы найти: " + ChatColor.WHITE + renameText)
-                    : List.of(ChatColor.GRAY + "Введите ник в поле выше"));
+                    ? List.of(ChatColor.GREEN + "Click to search: " + ChatColor.WHITE + renameText)
+                    : List.of(ChatColor.GRAY + "Type a name in the top field"));
             result.setItemMeta(meta);
         }
         event.setResult(result);
@@ -427,27 +427,27 @@ public class BountyGUI implements Listener {
 
         if (!isRealItem(deposited)) {
             sponsor.sendMessage(ChatColor.RED
-                    + "[MoroBounty] Сначала положите предмет-награду в центральный слот!");
+                    + "[BOUNTY] Place a reward item in the center slot first!");
             return;
         }
 
-        // Антидуп: проверяем, что предмет всё ещё есть в инвентаре
+        // Anti-dupe: ensure item still exists in player's inventory
         if (!sponsor.getInventory().containsAtLeast(deposited, deposited.getAmount())) {
-            sponsor.sendMessage(ChatColor.RED + "[MoroBounty] У вас больше нет этого предмета!");
+            sponsor.sendMessage(ChatColor.RED + "[BOUNTY] You no longer have this item!");
             gui.setItem(DEPOSIT_SLOT, null);
             return;
         }
 
         if (manager.hasBounty(victimUuid)) {
             sponsor.sendMessage(ChatColor.RED
-                    + "[MoroBounty] На этого игрока уже установлен активный баунти!");
+                    + "[BOUNTY] This player already has an active bounty!");
             returnItem(sponsor, deposited);
             gui.setItem(DEPOSIT_SLOT, null);
             sponsor.closeInventory();
             return;
         }
 
-        // ── Всё ок — фиксируем баунти ────────────────────────────────────────
+        // ── All checks passed — commit bounty ─────────────────────────────────
         sponsor.getInventory().removeItem(deposited.clone());
         gui.setItem(DEPOSIT_SLOT, null);
         manager.setBounty(sponsor.getUniqueId(), victimUuid, deposited.clone());
@@ -455,9 +455,9 @@ public class BountyGUI implements Listener {
         String victimName = Bukkit.getOfflinePlayer(victimUuid).getName();
         if (victimName == null) victimName = victimUuid.toString().substring(0, 8) + "...";
 
-        sponsor.sendMessage(ChatColor.GREEN + "[MoroBounty] " + ChatColor.WHITE
-                + "Баунти установлен на " + ChatColor.RED + victimName
-                + ChatColor.WHITE + "! Награда: " + ChatColor.GOLD
+        sponsor.sendMessage(ChatColor.GREEN + "[BOUNTY] " + ChatColor.WHITE
+                + "Bounty placed on " + ChatColor.RED + victimName
+                + ChatColor.WHITE + "! Reward: " + ChatColor.GOLD
                 + deposited.getAmount() + "x " + deposited.getType().name());
 
         sponsor.closeInventory();
@@ -468,8 +468,8 @@ public class BountyGUI implements Listener {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Строит голову жертвы с полной информацией о баунти.
-     * Лор: "§cЦЕНА БОШКИ: §f<кол-во> §b<тип предмета>"
+     * Builds victim head with full bounty info.
+     * Lore: "§cHEAD PRICE: §f<amount> §b<item type>"
      */
     private ItemStack buildHeadItem(UUID victimUuid) {
         OfflinePlayer op   = Bukkit.getOfflinePlayer(victimUuid);
@@ -482,25 +482,25 @@ public class BountyGUI implements Listener {
         if (meta == null) return head;
 
         meta.setOwningPlayer(op);
-        meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + "☠ " + victimName);
+        meta.setDisplayName(ChatColor.RED + "☠ " + victimName);
 
-        // Строим лор из десериализованного предмета
+        // Build lore from deserialized reward item
         List<String> lore = new ArrayList<>();
         ItemStack rewardItem = manager.getBountyItem(victimUuid);
         if (rewardItem != null) {
-            lore.add(ChatColor.RED + "ЦЕНА БОШКИ: "
+            lore.add(ChatColor.RED + "HEAD PRICE: "
                     + ChatColor.WHITE + rewardItem.getAmount()
                     + " " + ChatColor.AQUA + prettyMaterial(rewardItem.getType().name()));
 
-            // Если у предмета есть кастомное имя — показываем тоже
+            // If item has custom display name, include it
             if (rewardItem.hasItemMeta() && rewardItem.getItemMeta().hasDisplayName()) {
                 lore.add(ChatColor.GRAY + "(" + rewardItem.getItemMeta().getDisplayName()
                         + ChatColor.GRAY + ")");
             }
         } else {
-            // Fallback на текстовое описание из YAML (быстро, без десериализации)
+            // Fallback to YAML text description (fast, no deserialization)
             String desc = manager.getBountyDescription(victimUuid);
-            lore.add(ChatColor.RED + "ЦЕНА БОШКИ: "
+            lore.add(ChatColor.RED + "HEAD PRICE: "
                     + ChatColor.AQUA + (desc != null ? desc : "???"));
         }
         lore.add(ChatColor.DARK_GRAY + "ID: " + victimUuid.toString().substring(0, 8) + "...");
@@ -510,7 +510,7 @@ public class BountyGUI implements Listener {
         return head;
     }
 
-    /** "DIAMOND_SWORD" → "Diamond Sword" (для красивого отображения в лоре) */
+    /** "DIAMOND_SWORD" -> "Diamond Sword" (readable lore rendering) */
     private String prettyMaterial(String raw) {
         String[] parts = raw.split("_");
         StringBuilder sb = new StringBuilder();
@@ -538,7 +538,7 @@ public class BountyGUI implements Listener {
     // PRIVATE: Helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Сравнение без цветовых кодов — безопасно для любых вариаций § в заголовках. */
+    /** Color-stripped comparison for robust title matching. */
     private boolean isBrowseGUI(String title) {
         return ChatColor.stripColor(title)
                 .equals(ChatColor.stripColor(BROWSE_TITLE));
@@ -549,14 +549,14 @@ public class BountyGUI implements Listener {
                 .equals(ChatColor.stripColor(DEPOSIT_TITLE));
     }
 
-    /** true = реальный предмет, а не стеклянный placeholder */
+    /** true = real item, not a glass placeholder */
     private boolean isRealItem(ItemStack item) {
         if (item == null || item.getType() == Material.AIR) return false;
         return item.getType() != Material.GRAY_STAINED_GLASS_PANE
             && item.getType() != Material.LIME_STAINED_GLASS_PANE;
     }
 
-    /** Возвращает предмет в инвентарь; если места нет — дропает у ног. */
+    /** Returns item to inventory; drops at feet if inventory is full. */
     private void returnItem(Player player, ItemStack item) {
         if (item == null || item.getType() == Material.AIR) return;
         Map<Integer, ItemStack> overflow = player.getInventory().addItem(item.clone());

@@ -105,7 +105,7 @@ public class CombatManager {
             @Override
             public void run() {
                 String rawFormat = plugin.getConfig().getString(
-                        "messages.action-bar", "§c§lIn Combat: §e%time%s");
+                        "messages.action-bar", "§cIn Combat: §e%time%s");
 
                 for (Player player : Bukkit.getOnlinePlayers()) {
                     if (isInCombat(player)) {

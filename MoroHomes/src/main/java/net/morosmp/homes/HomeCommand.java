@@ -67,8 +67,8 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
 
     private void handleSetHome(Player player, String[] args) {
         if (args.length < 1) {
-            player.sendMessage("§c[Homes] Использование: /sethome <название>");
-            player.sendMessage("§8Пример: /sethome home | /sethome base | /sethome farm");
+            player.sendMessage("§c[HOMES] Usage: /sethome <name>");
+            player.sendMessage("§8Example: /sethome home | /sethome base | /sethome farm");
             return;
         }
 
@@ -76,7 +76,7 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
 
         // Validate name format: 1-16 alphanumeric + underscores
         if (name.length() > 16 || !name.matches("[a-z0-9_]+")) {
-            player.sendMessage("§c[Homes] Название дома может содержать только буквы, цифры и '_' (макс. 16 символов).");
+            player.sendMessage("§c[HOMES] Home name can only contain letters, numbers, and '_' (max 16 chars).");
             return;
         }
 
@@ -89,10 +89,10 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
             int max   = manager.getMaxHomes(player.getUniqueId());
             if (count >= max) {
                 // Exact message specified in the task
-                player.sendMessage("§cЛимит домов! Купите новый слот: /buyhome");
+                player.sendMessage("§c[HOMES] Home limit reached! Buy a new slot: /buyhome");
                 // Show their current status for convenience
-                player.sendMessage("§8Занято: §f" + count + "§8/§f" + max
-                        + " §8слотов. Используйте §f/homes §8для просмотра.");
+                player.sendMessage("§8Used: §f" + count + "§8/§f" + max
+                        + " §8slots. Use §f/homes §8to view them.");
                 return;
             }
         }
@@ -100,12 +100,12 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
         manager.setHome(player.getUniqueId(), name, player.getLocation());
 
         if (isOverwrite) {
-            player.sendMessage("§a[Homes] Дом §f'" + name + "' §aобновлён.");
+            player.sendMessage("§a[HOMES] Home §f'" + name + "' §ahas been updated.");
         } else {
             int count = manager.getHomeCount(player.getUniqueId());
             int max   = manager.getMaxHomes(player.getUniqueId());
-            player.sendMessage("§a[Homes] Дом §f'" + name + "' §aустановлен. "
-                    + "§8[§f" + count + "§8/§f" + max + "§8 слотов]");
+            player.sendMessage("§a[HOMES] Home §f'" + name + "' §ahas been set. "
+                    + "§8[§f" + count + "§8/§f" + max + "§8 slots]");
         }
     }
 
@@ -118,7 +118,7 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
         if (args.length < 1) {
             List<String> names = manager.getHomeNames(player.getUniqueId());
             if (names.isEmpty()) {
-                player.sendMessage("§c[Homes] У вас нет домов. Установите один командой §f/sethome <название>§c.");
+                player.sendMessage("§c[HOMES] You have no homes. Set one with §f/sethome <name>§c.");
                 return;
             }
             if (names.size() == 1) {
@@ -126,8 +126,8 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
                 teleportToHome(player, names.get(0));
             } else {
                 // Multiple homes — must specify a name
-                player.sendMessage("§c[Homes] Укажите название дома: §f/home <название>");
-                player.sendMessage("§7Ваши дома: §f" + String.join("§7, §f", names));
+                player.sendMessage("§c[HOMES] Specify a home name: §f/home <name>");
+                player.sendMessage("§7Your homes: §f" + String.join("§7, §f", names));
             }
             return;
         }
@@ -139,22 +139,22 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
     private void teleportToHome(Player player, String name) {
         name = name.toLowerCase();
         if (!manager.hasHome(player.getUniqueId(), name)) {
-            player.sendMessage("§c[Homes] Дом §f'" + name + "' §cне найден.");
+            player.sendMessage("§c[HOMES] Home §f'" + name + "' §cnot found.");
             List<String> names = manager.getHomeNames(player.getUniqueId());
             if (!names.isEmpty()) {
-                player.sendMessage("§7Ваши дома: §f" + String.join("§7, §f", names));
+                player.sendMessage("§7Your homes: §f" + String.join("§7, §f", names));
             }
             return;
         }
 
         Location loc = manager.getHome(player.getUniqueId(), name);
         if (loc == null) {
-            player.sendMessage("§c[Homes] Мир, в котором находится дом §f'" + name + "', §cбольше не существует.");
+            player.sendMessage("§c[HOMES] The world containing home §f'" + name + "' §cno longer exists.");
             return;
         }
 
         player.teleport(loc);
-        player.sendMessage("§a[Homes] Телепортация к дому §f'" + name + "'§a.");
+        player.sendMessage("§a[HOMES] Teleporting to home §f'" + name + "'§a.");
     }
 
     // =========================================================================
@@ -163,10 +163,10 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
 
     private void handleDelHome(Player player, String[] args) {
         if (args.length < 1) {
-            player.sendMessage("§c[Homes] Использование: §f/delhome <название>");
+            player.sendMessage("§c[HOMES] Usage: §f/delhome <name>");
             List<String> names = manager.getHomeNames(player.getUniqueId());
             if (!names.isEmpty()) {
-                player.sendMessage("§7Ваши дома: §f" + String.join("§7, §f", names));
+                player.sendMessage("§7Your homes: §f" + String.join("§7, §f", names));
             }
             return;
         }
@@ -174,16 +174,16 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
         String name = args[0].toLowerCase();
 
         if (!manager.hasHome(player.getUniqueId(), name)) {
-            player.sendMessage("§c[Homes] Дом §f'" + name + "' §cне найден.");
+            player.sendMessage("§c[HOMES] Home §f'" + name + "' §cnot found.");
             return;
         }
 
         manager.deleteHome(player.getUniqueId(), name);
-        player.sendMessage("§a[Homes] Дом §f'" + name + "' §aудалён.");
+        player.sendMessage("§a[HOMES] Home §f'" + name + "' §ahas been deleted.");
 
         int remaining = manager.getHomeCount(player.getUniqueId());
         int max       = manager.getMaxHomes(player.getUniqueId());
-        player.sendMessage("§8Осталось домов: §f" + remaining + "§8/§f" + max + "§8 слотов.");
+        player.sendMessage("§8Homes remaining: §f" + remaining + "§8/§f" + max + "§8 slots.");
     }
 
     // =========================================================================
@@ -194,10 +194,10 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
         List<String> names = manager.getHomeNames(player.getUniqueId());
         int max = manager.getMaxHomes(player.getUniqueId());
 
-        player.sendMessage("§6§l— Ваши дома §8[§f" + names.size() + "§8/§f" + max + "§8 слотов] —");
+        player.sendMessage("§6— YOUR HOMES §8[§f" + names.size() + "§8/§f" + max + "§8 SLOTS] —");
 
         if (names.isEmpty()) {
-            player.sendMessage("§7  Нет установленных домов. Используйте §f/sethome <название>§7.");
+            player.sendMessage("§7  No homes set. Use §f/sethome <name>§7.");
         } else {
             for (String n : names) {
                 Location loc = manager.getHome(player.getUniqueId(), n);
@@ -206,7 +206,7 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
                             + " §8Y:§f" + (int) loc.getY()
                             + " §8Z:§f" + (int) loc.getZ()
                             + " §8[" + loc.getWorld().getName() + "]"
-                        : "§c(мир недоступен)";
+                        : "§c(world unavailable)";
                 player.sendMessage("  §e" + n + " §8→ " + coords);
             }
         }
@@ -214,13 +214,13 @@ public class HomeCommand implements CommandExecutor, TabCompleter {
         // Upgrade hint if another slot is available
         int upgradeCost = manager.getUpgradeCost(player.getUniqueId());
         if (upgradeCost > 0) {
-            player.sendMessage("§8Следующий слот: §f/buyhome §8(стоимость: §f"
-                    + upgradeCost + " §bАлмазов§8)");
+            player.sendMessage("§8Next slot: §f/buyhome §8(cost: §f"
+                    + upgradeCost + " §bDiamonds§8)");
         } else if (names.size() < max) {
             // Has free slots remaining
-            player.sendMessage("§7  Свободных слотов: §f" + (max - names.size()));
+            player.sendMessage("§7  Free slots: §f" + (max - names.size()));
         } else {
-            player.sendMessage("§8Все слоты максимально прокачаны.");
+            player.sendMessage("§8All slots are fully upgraded.");
         }
     }
 

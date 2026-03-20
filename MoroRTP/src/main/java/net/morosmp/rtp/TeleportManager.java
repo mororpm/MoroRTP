@@ -18,7 +18,7 @@ import java.util.UUID;
  *
  * V2 Changes (ActionBar countdown):
  * - Removed all countdown player.sendMessage().
- * - Every timer second -> sendActionBar("§aTeleporting in §l%d §as.")
+ * - Every timer second -> sendActionBar("§aTeleporting in %d §as.")
  * - On success     -> sendActionBar("§aSuccess!") + one chat message with coords.
  * - On cancel      -> sendActionBar("§cYou moved! Teleportation cancelled.")
  * - Cooldown warning remains in chat (one-time message, not a countdown).
@@ -110,7 +110,7 @@ public class TeleportManager {
                 }
 
                 // --- ActionBar countdown ---
-                sendActionBar(player, "§aTeleporting in §l" + ticks + " §as.");
+                sendActionBar(player, "§aTeleporting in " + ticks + " §as.");
                 playSound(player, "sounds.countdown", "BLOCK_NOTE_BLOCK_HAT");
                 ticks--;
             }

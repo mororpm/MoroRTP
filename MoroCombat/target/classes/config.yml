@@ -9,6 +9,6 @@ blocked-commands:
   - "/rtp"
   - "/warp"
 messages:
-  action-bar: "§c§lIn Combat: §e%time%s"
+  action-bar: "§cIn Combat: §e%time%s"
   quit-broadcast: "§c☠ §e%player% §ccombat logged and was eliminated!"
   command-blocked: "§cYou cannot use teleport commands while in combat!"

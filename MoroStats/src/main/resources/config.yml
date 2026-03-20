@@ -1,5 +1,5 @@
 # MoroStats Cloud Configuration
-# Вставь сюда ссылку из MongoDB Atlas (Connect -> Connect your application)
-# Пример: mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+# Paste your MongoDB Atlas URI here (Connect -> Connect your application)
+# Example: mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
 mongodb-uri: ""
 database-name: "morosmp"

@@ -12,14 +12,14 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * BountyCommand — обрабатывает команду /bounty.
+ * BountyCommand — handles /bounty command.
  *
- * Подкоманды:
- *   /bounty              — открыть Browse GUI (страница 0, без фильтра)
- *   /bounty list         — то же самое
- *   /bounty list <ник>   — открыть Browse GUI с предустановленным фильтром по нику
- *   /bounty create <игрок> — открыть Deposit GUI для установки баунти
- *   /bounty info <игрок>   — показать информацию об активном баунти в чат
+ * Subcommands:
+ *   /bounty                 — open Browse GUI (page 0, no filter)
+ *   /bounty list            — same as above
+ *   /bounty list <name>     — open Browse GUI with name filter pre-applied
+ *   /bounty create <player> — open Deposit GUI to place a bounty
+ *   /bounty info <player>   — print active bounty info in chat
  */
 public class BountyCommand implements CommandExecutor, TabCompleter {
 
@@ -40,11 +40,11 @@ public class BountyCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(ChatColor.RED + "Только игроки могут использовать эту команду.");
+            sender.sendMessage(ChatColor.RED + "Only players can use this command.");
             return true;
         }
 
-        // /bounty (без аргументов) — сразу открываем Browse GUI
+        // /bounty (no args) — open Browse GUI immediately
         if (args.length == 0) {
             gui.openBrowse(player, 0, null);
             return true;
@@ -53,7 +53,7 @@ public class BountyCommand implements CommandExecutor, TabCompleter {
         switch (args[0].toLowerCase()) {
 
             // ──────────────────────────────────────────────────────────────────
-            // /bounty list [ник]   — Browse GUI, опционально с фильтром
+            // /bounty list [name] — Browse GUI, optionally with filter
             // ──────────────────────────────────────────────────────────────────
             case "list" -> {
                 String filter = (args.length >= 2) ? args[1] : null;
@@ -61,29 +61,29 @@ public class BountyCommand implements CommandExecutor, TabCompleter {
             }
 
             // ──────────────────────────────────────────────────────────────────
-            // /bounty create <игрок>   — Deposit GUI
+            // /bounty create <player> — Deposit GUI
             // ──────────────────────────────────────────────────────────────────
             case "create" -> {
                 if (args.length < 2) {
-                    player.sendMessage(ChatColor.RED + "Использование: /bounty create <игрок>");
+                    player.sendMessage(ChatColor.RED + "Usage: /bounty create <player>");
                     return true;
                 }
 
                 Player victim = Bukkit.getPlayer(args[1]);
                 if (victim == null) {
-                    player.sendMessage(ChatColor.RED + "[MoroBounty] Игрок '"
-                            + args[1] + "' не в сети.");
+                    player.sendMessage(ChatColor.RED + "[BOUNTY] Player '"
+                            + args[1] + "' is offline.");
                     return true;
                 }
                 if (victim.equals(player)) {
                     player.sendMessage(ChatColor.RED
-                            + "[MoroBounty] Нельзя установить баунти на себя.");
+                            + "[BOUNTY] You cannot place a bounty on yourself.");
                     return true;
                 }
                 if (manager.hasBounty(victim.getUniqueId())) {
                     String desc = manager.getBountyDescription(victim.getUniqueId());
-                    player.sendMessage(ChatColor.RED + "[MoroBounty] На "
-                            + victim.getName() + " уже есть активный баунти"
+                    player.sendMessage(ChatColor.RED + "[BOUNTY] "
+                            + victim.getName() + " already has an active bounty"
                             + (desc != null ? " (" + desc + ")" : "") + ".");
                     return true;
                 }
@@ -92,34 +92,34 @@ public class BountyCommand implements CommandExecutor, TabCompleter {
             }
 
             // ──────────────────────────────────────────────────────────────────
-            // /bounty info <игрок>   — инфо в чат (не требует GUI)
+            // /bounty info <player> — chat info (no GUI required)
             // ──────────────────────────────────────────────────────────────────
             case "info" -> {
                 if (args.length < 2) {
-                    player.sendMessage(ChatColor.RED + "Использование: /bounty info <игрок>");
+                    player.sendMessage(ChatColor.RED + "Usage: /bounty info <player>");
                     return true;
                 }
                 Player target = Bukkit.getPlayer(args[1]);
                 if (target == null) {
-                    player.sendMessage(ChatColor.RED + "[MoroBounty] Игрок '"
-                            + args[1] + "' не в сети.");
+                    player.sendMessage(ChatColor.RED + "[BOUNTY] Player '"
+                            + args[1] + "' is offline.");
                     return true;
                 }
                 if (!manager.hasBounty(target.getUniqueId())) {
-                    player.sendMessage(ChatColor.YELLOW + "[MoroBounty] У "
-                            + target.getName() + " нет активного баунти.");
+                    player.sendMessage(ChatColor.YELLOW + "[BOUNTY] "
+                            + target.getName() + " has no active bounty.");
                     return true;
                 }
                 String desc = manager.getBountyDescription(target.getUniqueId());
-                player.sendMessage(ChatColor.GREEN + "[MoroBounty] "
-                        + ChatColor.WHITE + "Баунти на "
+                player.sendMessage(ChatColor.GREEN + "[BOUNTY] "
+                        + ChatColor.WHITE + "Bounty on "
                         + ChatColor.RED + target.getName()
-                        + ChatColor.WHITE + " — награда: "
-                        + ChatColor.GOLD + (desc != null ? desc : "Неизвестный предмет"));
+                        + ChatColor.WHITE + " — reward: "
+                        + ChatColor.GOLD + (desc != null ? desc : "Unknown item"));
             }
 
             // ──────────────────────────────────────────────────────────────────
-            // Неизвестная подкоманда
+            // Unknown subcommand
             // ──────────────────────────────────────────────────────────────────
             default -> sendHelp(player);
         }
@@ -142,7 +142,7 @@ public class BountyCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 2) {
             switch (args[0].toLowerCase()) {
-                // list <ник> — предлагаем онлайн игроков как фильтр
+                // list <name> — suggest online players as filter
                 case "list", "create", "info" -> {
                     return Bukkit.getOnlinePlayers().stream()
                             .map(Player::getName)
@@ -161,14 +161,14 @@ public class BountyCommand implements CommandExecutor, TabCompleter {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void sendHelp(Player p) {
-        p.sendMessage(ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "— MoroBounty —");
+        p.sendMessage(ChatColor.DARK_PURPLE + "— BOUNTY —");
         p.sendMessage(ChatColor.GRAY + "/bounty "
-                + ChatColor.WHITE + "— Открыть список всех баунти");
-        p.sendMessage(ChatColor.GRAY + "/bounty list [ник] "
-                + ChatColor.WHITE + "— Список с фильтром по нику");
-        p.sendMessage(ChatColor.GRAY + "/bounty create <игрок> "
-                + ChatColor.WHITE + "— Установить баунти (открывает меню депозита)");
-        p.sendMessage(ChatColor.GRAY + "/bounty info <игрок> "
-                + ChatColor.WHITE + "— Информация об активном баунти");
+                + ChatColor.WHITE + "— Open the full bounty list");
+        p.sendMessage(ChatColor.GRAY + "/bounty list [name] "
+                + ChatColor.WHITE + "— Open list with player-name filter");
+        p.sendMessage(ChatColor.GRAY + "/bounty create <player> "
+                + ChatColor.WHITE + "— Place a bounty (opens deposit menu)");
+        p.sendMessage(ChatColor.GRAY + "/bounty info <player> "
+                + ChatColor.WHITE + "— Show active bounty details");
     }
 }

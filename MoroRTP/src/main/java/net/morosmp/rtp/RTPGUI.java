@@ -46,7 +46,7 @@ public class RTPGUI implements Listener {
     public void openMenu(Player player) {
         int size  = plugin.getConfig().getInt("gui.size", 27);
         // Apply small-caps to the raw config title (§-codes already present)
-        String title = sc(plugin.getConfig().getString("gui.title", "§5§lMoro Random Teleport"));
+        String title = sc(plugin.getConfig().getString("gui.title", "§5Moro Random Teleport"));
 
         // Cache the ChatColor-stripped version for use in the click handler.
         // ChatColor.stripColor removes all §x sequences so the comparison is
@@ -77,7 +77,7 @@ public class RTPGUI implements Listener {
         // but defensive programming keeps the plugin from NPE-crashing on boot).
         if (cachedStrippedTitle == null) {
             cachedStrippedTitle = ChatColor.stripColor(
-                sc(plugin.getConfig().getString("gui.title", "§5§lMoro Random Teleport"))
+                sc(plugin.getConfig().getString("gui.title", "§5Moro Random Teleport"))
             );
         }
 

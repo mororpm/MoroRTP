@@ -14,19 +14,19 @@ import java.util.UUID;
 import java.util.logging.Level;
 
 /**
- * BountyManager — единственный источник правды для всех данных баунти.
+ * BountyManager — single source of truth for all bounty data.
  *
- * Формат хранения (bounties.yml):
+ * Storage format (bounties.yml):
  *   bounties:
  *     <victim-uuid>:
  *       sponsor:   <placer-uuid>
  *       item:      <Base64 ItemStack>
- *       itemDesc:  "10x DIAMOND"     # человекочитаемый лейбл, только для логов
+ *       itemDesc:  "10x DIAMOND"     # human-readable label, logs/UI only
  *       timestamp: 1710000000000
  *
- * Сериализация:
+ * Serialization:
  *   ItemStack#serializeAsBytes() / ItemStack.deserializeBytes() — Paper 1.20.4+.
- *   Сохраняет ВСЕ данные: имя, лор, зачарования, NBT.
+ *   Preserves all data: name, lore, enchantments, NBT.
  */
 public class BountyManager {
 
@@ -54,12 +54,12 @@ public class BountyManager {
         try {
             dataConfig.save(dataFile);
         } catch (IOException e) {
-            plugin.getLogger().log(Level.SEVERE, "Не удалось сохранить bounties.yml!", e);
+            plugin.getLogger().log(Level.SEVERE, "Failed to save bounties.yml!", e);
         }
     }
 
     // -------------------------------------------------------------------------
-    // Сериализация (Paper 1.21 API)
+    // Serialization (Paper 1.21 API)
     // -------------------------------------------------------------------------
 
     public String serializeItem(ItemStack item) {
@@ -73,7 +73,7 @@ public class BountyManager {
             return ItemStack.deserializeBytes(Base64.getDecoder().decode(base64));
         } catch (Exception e) {
             plugin.getLogger().log(Level.WARNING,
-                    "Не удалось десериализовать предмет баунти: " + e.getMessage());
+                    "Failed to deserialize bounty item: " + e.getMessage());
             return null;
         }
     }
@@ -82,20 +82,20 @@ public class BountyManager {
     // Bounty CRUD
     // -------------------------------------------------------------------------
 
-    /** Возвращает true, если на жертву активен баунти. */
+    /** Returns true if a victim currently has an active bounty. */
     public boolean hasBounty(UUID victimUuid) {
         return dataConfig.contains(BOUNTIES_PATH + victimUuid);
     }
 
     /**
-     * Устанавливает баунти. Вызывающий обязан проверить hasBounty() перед вызовом.
-     * Перезапись — старый предмет безвозвратно теряется.
+     * Sets a bounty. Caller must check hasBounty() before calling.
+     * Overwrite behavior: previous item is permanently lost.
      */
     public void setBounty(UUID sponsorUuid, UUID victimUuid, ItemStack item) {
         String serialized = serializeItem(item);
         if (serialized == null) {
             plugin.getLogger().warning(
-                    "setBounty() вызван с null/несериализуемым предметом — баунти не установлен.");
+                    "setBounty() called with null/non-serializable item — bounty not set.");
             return;
         }
         String path = BOUNTIES_PATH + victimUuid;
@@ -107,23 +107,23 @@ public class BountyManager {
     }
 
     /**
-     * Атомарная операция: читает ItemStack из YAML и немедленно удаляет запись.
-     * Используется при PlayerDeathEvent. Возвращает null если нет баунти или данные битые.
+     * Atomic operation: reads ItemStack from YAML and immediately removes the record.
+     * Used on PlayerDeathEvent. Returns null if no bounty or data is corrupted.
      */
     public ItemStack claimAndRemoveBounty(UUID victimUuid) {
         if (!hasBounty(victimUuid)) return null;
         String base64  = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".item");
         ItemStack item = deserializeItem(base64);
-        // Удаляем узел в любом случае — битая запись не должна блокировать будущие баунти
+        // Always delete the node — corrupted records must not block future bounties.
         dataConfig.set(BOUNTIES_PATH + victimUuid.toString(), null);
         save();
         return item;
     }
 
     /**
-     * [NEW] Читает и десериализует предмет баунти БЕЗ удаления из хранилища.
-     * Используется GUI для отображения информации о награде в лоре головы.
-     * Возвращает null, если баунти нет или данные повреждены.
+     * [NEW] Reads and deserializes bounty item WITHOUT deleting from storage.
+     * Used by GUI to render reward details in head lore.
+     * Returns null if there is no bounty or data is corrupted.
      */
     public ItemStack getBountyItem(UUID victimUuid) {
         if (!hasBounty(victimUuid)) return null;
@@ -132,9 +132,9 @@ public class BountyManager {
     }
 
     /**
-     * [NEW] Возвращает упорядоченный список UUID всех жертв с активными баунти.
-     * Порядок = порядок вставки в YAML (хронологический).
-     * Используется browse-GUI для отображения страниц голов.
+     * [NEW] Returns ordered list of UUIDs for all victims with active bounties.
+     * Order = YAML insertion order (chronological).
+     * Used by browse GUI for paginated head list.
      */
     public List<UUID> getAllBountyVictimUuids() {
         ConfigurationSection section = dataConfig.getConfigurationSection("bounties");
@@ -144,24 +144,24 @@ public class BountyManager {
             try {
                 result.add(UUID.fromString(key));
             } catch (IllegalArgumentException ignored) {
-                // Повреждённый UUID-ключ — пропускаем
+                // Corrupted UUID key — skip.
             }
         }
         return result;
     }
 
-    /** Отменяет баунти без дропа. Предмет теряется — намеренно (нельзя отозвать баунти). */
+    /** Cancels bounty without drop. Item is intentionally lost (no bounty recall). */
     public void cancelBounty(UUID victimUuid) {
         dataConfig.set(BOUNTIES_PATH + victimUuid.toString(), null);
         save();
     }
 
-    /** "10x DIAMOND" и т.д. Null если баунти нет. */
+    /** "10x DIAMOND" etc. Null if no bounty exists. */
     public String getBountyDescription(UUID victimUuid) {
         return dataConfig.getString(BOUNTIES_PATH + victimUuid + ".itemDesc");
     }
 
-    /** UUID спонсора или null. */
+    /** Sponsor UUID or null. */
     public UUID getSponsorUuid(UUID victimUuid) {
         String raw = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".sponsor");
         if (raw == null) return null;
