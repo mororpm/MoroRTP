@@ -1,1 +1,5 @@
+net\morosmp\stats\ColorUtil.class
 net\morosmp\stats\MoroStats.class
+net\morosmp\stats\PlayerListener.class
+net\morosmp\stats\ScoreboardManager$1.class
+net\morosmp\stats\ScoreboardManager.class

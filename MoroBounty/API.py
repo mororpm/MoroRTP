@@ -3,7 +3,7 @@ import time
 
 def monitor_bounties():
     db_path = r"U:\McServerData\moro_bounty.db"
-    print("📡 Подключение к API MoroSMP...")
+    print("📡 Connecting to MoroSMP API...")
     
     while True:
         try:
@@ -18,7 +18,7 @@ def monitor_bounties():
             
             conn.close()
         except Exception as e:
-            print(f"Ошибка связи: {e}")
+            print(f"Connection error: {e}")
         
         time.sleep(30) # Ask every 30 seconds
 

@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>net.morosmp</groupId>
     <artifactId>MoroBounty</artifactId>
-    <version>2.0.0</version>
+    <version>3.0.0</version>
     <packaging>jar</packaging>
 
     <properties>
@@ -24,12 +25,24 @@
     </repositories>
 
     <dependencies>
-        <!-- Paper API 1.21.11 — the ONLY dependency. No Vault, no MongoDB. -->
+        <!-- Paper API — provided by the server at runtime -->
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>1.21.4-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!--
+            SQLite JDBC — shaded into the jar so no extra server dependency is needed.
+            The Python external API (API.py) reads the same .db file concurrently;
+            WAL journal mode (set on first connection) makes this safe.
+        -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>3.45.3.0</version>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
 
@@ -43,6 +56,32 @@
                     <source>21</source>
                     <target>21</target>
                 </configuration>
+            </plugin>
+
+            <!--
+                Shade SQLite JDBC into the output jar and relocate it to our
+                own namespace. Relocation prevents class-loading conflicts if
+                another plugin also shades SQLite JDBC at a different version.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <relocations>
+                                <relocation>
+                                    <pattern>org.sqlite</pattern>
+                                    <shadedPattern>net.morosmp.bounty.lib.sqlite</shadedPattern>
+                                </relocation>
+                            </relocations>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

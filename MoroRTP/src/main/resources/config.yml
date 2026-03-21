@@ -1,24 +1,23 @@
-# MoroRTP Premium Configuration 1.21.11
+# MoroRTP Configuration — Paper 1.21.11
 
-# --- Timing Settings ---
+# --- Timing ---
 teleport-delay: 3
-teleport-cooldown: 300 # 5 minutes
+teleport-cooldown: 300   # seconds (5 minutes)
 
-# --- Distance Settings ---
+# --- Distance ---
 min-distance: 500
 max-distance: 10000
-border-offset: 15
-# If true, Nether coordinates are divided by 8 (vanilla behavior)
-scale-nether-coords: true
+border-offset: 15        # blocks from the world border edge to stay inside
+scale-nether-coords: true # divide Nether X/Z by 8 to match Overworld scale
 nether-y-level: 50
 
-# --- Sound Settings ---
+# --- Sounds ---
 sounds:
-  click: "UI_BUTTON_CLICK"
+  click:     "UI_BUTTON_CLICK"
   countdown: "BLOCK_NOTE_BLOCK_HAT"
-  success: "ENTITY_ENDERMAN_TELEPORT"
+  success:   "ENTITY_ENDERMAN_TELEPORT"
 
-# --- GUI Settings ---
+# --- GUI ---
 gui:
   title: "&#E0D7FFMORO RANDOM TELEPORT"
   size: 27
@@ -34,3 +33,31 @@ gui:
     slot: 15
     material: "END_STONE"
     name: "&#EBDDF4THE END"
+
+# --- Safe Location Search ---
+# How many times to retry finding a safe spot before giving up.
+# Raised to 100 (was 25) to support The End, where large void regions
+# cause a high per-attempt rejection rate.
+max-attempts: 100
+
+# Blocks the player CANNOT land on or stand in.
+# Uses exact Bukkit Material names (case-insensitive).
+blacklisted-blocks:
+  # Lethal surface blocks
+  - LAVA
+  - MAGMA_BLOCK
+  - FIRE
+  - SOUL_FIRE
+  - CACTUS
+  - WITHER_ROSE
+  - SWEET_BERRY_BUSH
+  # Trap / suffocation hazards
+  - POWDER_SNOW
+  - COBWEB
+  # Liquid / current hazards
+  - WATER
+  - BUBBLE_COLUMN
+  # Void / missing terrain (End edges, sky)
+  - AIR
+  - VOID_AIR
+  - CAVE_AIR

@@ -1,5 +1,10 @@
 name: MoroStats
-version: 1.0.0
+version: 2.0.0
 main: net.morosmp.stats.MoroStats
 api-version: '1.21'
-depend: [Vault]
+description: Packet-based scoreboard with PlaceholderAPI stats for MoroSMP.
+
+# PlaceholderAPI is required for stat placeholders.
+# FastBoard is shaded into the jar — no external dependency needed.
+softdepend:
+  - PlaceholderAPI

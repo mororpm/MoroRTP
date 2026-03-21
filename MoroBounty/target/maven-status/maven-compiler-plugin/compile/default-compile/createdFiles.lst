@@ -3,3 +3,4 @@ net\morosmp\bounty\BountyGUI.class
 net\morosmp\bounty\DeathListener.class
 net\morosmp\bounty\MoroBounty.class
 net\morosmp\bounty\BountyCommand.class
+net\morosmp\bounty\BountyManager$BountyRecord.class

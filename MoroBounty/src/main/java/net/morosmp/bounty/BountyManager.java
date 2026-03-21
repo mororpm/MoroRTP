@@ -1,66 +1,188 @@
 package net.morosmp.bounty;
 
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.Bukkit;
 import org.bukkit.inventory.ItemStack;
 
 import java.io.File;
-import java.io.IOException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 /**
  * BountyManager — single source of truth for all bounty data.
  *
- * Storage format (bounties.yml):
- *   bounties:
- *     <victim-uuid>:
- *       sponsor:   <placer-uuid>
- *       item:      <Base64 ItemStack>
- *       itemDesc:  "10x DIAMOND"     # human-readable label, logs/UI only
- *       timestamp: 1710000000000
+ * Storage: SQLite (plugins/MoroBounty/database.db)
  *
- * Serialization:
- *   ItemStack#serializeAsBytes() / ItemStack.deserializeBytes() — Paper 1.20.4+.
- *   Preserves all data: name, lore, enchantments, NBT.
+ * Table schema:
+ *   bounties (
+ *       uuid         TEXT PRIMARY KEY,   -- victim player UUID
+ *       sponsor_uuid TEXT NOT NULL,
+ *       target_name  TEXT NOT NULL,      -- victim's name at placement time
+ *       item_base64  TEXT NOT NULL,      -- Base64 Paper-serialized ItemStack
+ *       item_desc    TEXT NOT NULL,      -- e.g. "10x DIAMOND" (human label)
+ *       amount       INTEGER NOT NULL,   -- item count (consumed by Python API)
+ *       timestamp    INTEGER NOT NULL    -- placement time, Unix millis
+ *   )
+ *
+ * Architecture — cache + async writes:
+ *
+ *   ALL reads (hasBounty, getBountyItem, etc.) are served from an in-memory
+ *   ConcurrentHashMap. They are always instant and main-thread safe.
+ *
+ *   ALL writes (setBounty, claimAndRemoveBounty, cancelBounty) update the
+ *   cache synchronously on the calling thread, then fire the SQL statement
+ *   on an async BukkitScheduler task so the main thread is never blocked.
+ *
+ *   On startup the cache is loaded from the database via an async task.
+ *   This completes before any player can join, so reads are always warm.
+ *
+ *   SQLite WAL mode is enabled: the Python API (API.py) can SELECT from
+ *   the same .db file concurrently without file-locking conflicts.
  */
 public class BountyManager {
 
-    private static final String BOUNTIES_PATH = "bounties.";
+    // ── SQL ───────────────────────────────────────────────────────────────────
+    private static final String SQL_CREATE = """
+            CREATE TABLE IF NOT EXISTS bounties (
+                uuid         TEXT    PRIMARY KEY,
+                sponsor_uuid TEXT    NOT NULL,
+                target_name  TEXT    NOT NULL,
+                item_base64  TEXT    NOT NULL,
+                item_desc    TEXT    NOT NULL,
+                amount       INTEGER NOT NULL,
+                timestamp    INTEGER NOT NULL
+            )""";
 
-    private final MoroBounty      plugin;
-    private       File            dataFile;
-    private       FileConfiguration dataConfig;
+    private static final String SQL_UPSERT =
+            "INSERT OR REPLACE INTO bounties "
+            + "(uuid, sponsor_uuid, target_name, item_base64, item_desc, amount, timestamp) "
+            + "VALUES (?, ?, ?, ?, ?, ?, ?)";
 
-    public BountyManager(MoroBounty plugin) {
-        this.plugin = plugin;
-        loadDataFile();
-    }
+    private static final String SQL_DELETE = "DELETE FROM bounties WHERE uuid = ?";
+    private static final String SQL_ALL    =
+            "SELECT uuid, sponsor_uuid, target_name, item_base64, item_desc, amount, timestamp "
+            + "FROM bounties";
 
-    // -------------------------------------------------------------------------
-    // YAML I/O
-    // -------------------------------------------------------------------------
+    // ── Inner record (one database row) ──────────────────────────────────────
+    private static final class BountyRecord {
+        final UUID   sponsorUuid;
+        final String targetName;
+        final String itemBase64;
+        final String itemDesc;
+        final int    amount;
+        final long   timestamp;
 
-    private void loadDataFile() {
-        dataFile   = new File(plugin.getDataFolder(), "bounties.yml");
-        dataConfig = YamlConfiguration.loadConfiguration(dataFile);
-    }
-
-    private void save() {
-        try {
-            dataConfig.save(dataFile);
-        } catch (IOException e) {
-            plugin.getLogger().log(Level.SEVERE, "Failed to save bounties.yml!", e);
+        BountyRecord(UUID s, String tn, String b64, String desc, int amt, long ts) {
+            sponsorUuid = s; targetName = tn; itemBase64 = b64;
+            itemDesc = desc; amount = amt; timestamp = ts;
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Serialization (Paper 1.21 API)
-    // -------------------------------------------------------------------------
+    // ── State ─────────────────────────────────────────────────────────────────
+    private final MoroBounty              plugin;
+    private       Connection              connection;
+    private final Map<UUID, BountyRecord> cache = new ConcurrentHashMap<>();
+
+    // =========================================================================
+    // Constructor
+    // =========================================================================
+
+    public BountyManager(MoroBounty plugin) {
+        this.plugin = plugin;
+        initDatabase();
+        loadCacheAsync();
+    }
+
+    // =========================================================================
+    // Database lifecycle
+    // =========================================================================
+
+    /**
+     * Opens the SQLite connection, enables WAL mode, and creates the table.
+     * Runs on the main thread — SQLite file creation is fast enough for startup.
+     */
+    private void initDatabase() {
+        plugin.getDataFolder().mkdirs();
+        File dbFile = new File(plugin.getDataFolder(), "database.db");
+        try {
+            Class.forName("org.sqlite.JDBC");
+            connection = DriverManager.getConnection(
+                    "jdbc:sqlite:" + dbFile.getAbsolutePath());
+
+            try (Statement st = connection.createStatement()) {
+                // WAL: Python API can read while Java is writing
+                st.execute("PRAGMA journal_mode=WAL");
+                // NORMAL is safe for WAL and faster than FULL
+                st.execute("PRAGMA synchronous=NORMAL");
+                st.execute(SQL_CREATE);
+            }
+            plugin.getLogger().info(
+                    "[BountyManager] Database ready: " + dbFile.getPath());
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.SEVERE,
+                    "[BountyManager] Database initialisation failed!", e);
+        }
+    }
+
+    /**
+     * Loads all rows from the database into the in-memory cache asynchronously.
+     * Because plugins enable before any player login packets are processed, the
+     * cache is fully warm before any GUI or command can be triggered.
+     */
+    private void loadCacheAsync() {
+        if (connection == null) return;
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try (Statement st = connection.createStatement();
+                 ResultSet rs = st.executeQuery(SQL_ALL)) {
+
+                int n = 0;
+                while (rs.next()) {
+                    cache.put(
+                        UUID.fromString(rs.getString("uuid")),
+                        new BountyRecord(
+                            UUID.fromString(rs.getString("sponsor_uuid")),
+                            rs.getString("target_name"),
+                            rs.getString("item_base64"),
+                            rs.getString("item_desc"),
+                            rs.getInt("amount"),
+                            rs.getLong("timestamp")
+                        )
+                    );
+                    n++;
+                }
+                plugin.getLogger().info(
+                        "[BountyManager] Cache loaded — " + n + " active bounty(ies).");
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE,
+                        "[BountyManager] Failed to load cache!", e);
+            }
+        });
+    }
+
+    /** Closes the database connection. Call from onDisable(). */
+    public void closeConnection() {
+        if (connection == null) return;
+        try {
+            connection.close();
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[BountyManager] Error closing connection.", e);
+        }
+    }
+
+    // =========================================================================
+    // ItemStack serialization (Paper 1.20.4+)
+    // =========================================================================
 
     public String serializeItem(ItemStack item) {
         if (item == null) return null;
@@ -73,98 +195,129 @@ public class BountyManager {
             return ItemStack.deserializeBytes(Base64.getDecoder().decode(base64));
         } catch (Exception e) {
             plugin.getLogger().log(Level.WARNING,
-                    "Failed to deserialize bounty item: " + e.getMessage());
+                    "[BountyManager] Deserialize failed: " + e.getMessage());
             return null;
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Bounty CRUD
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Read API — all served from cache, always synchronous
+    // =========================================================================
 
-    /** Returns true if a victim currently has an active bounty. */
     public boolean hasBounty(UUID victimUuid) {
-        return dataConfig.contains(BOUNTIES_PATH + victimUuid);
+        return cache.containsKey(victimUuid);
+    }
+
+    public List<UUID> getAllBountyVictimUuids() {
+        return new ArrayList<>(cache.keySet());
     }
 
     /**
-     * Sets a bounty. Caller must check hasBounty() before calling.
-     * Overwrite behavior: previous item is permanently lost.
-     */
-    public void setBounty(UUID sponsorUuid, UUID victimUuid, ItemStack item) {
-        String serialized = serializeItem(item);
-        if (serialized == null) {
-            plugin.getLogger().warning(
-                    "setBounty() called with null/non-serializable item — bounty not set.");
-            return;
-        }
-        String path = BOUNTIES_PATH + victimUuid;
-        dataConfig.set(path + ".sponsor",   sponsorUuid.toString());
-        dataConfig.set(path + ".item",      serialized);
-        dataConfig.set(path + ".itemDesc",  item.getAmount() + "x " + item.getType().name());
-        dataConfig.set(path + ".timestamp", System.currentTimeMillis());
-        save();
-    }
-
-    /**
-     * Atomic operation: reads ItemStack from YAML and immediately removes the record.
-     * Used on PlayerDeathEvent. Returns null if no bounty or data is corrupted.
-     */
-    public ItemStack claimAndRemoveBounty(UUID victimUuid) {
-        if (!hasBounty(victimUuid)) return null;
-        String base64  = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".item");
-        ItemStack item = deserializeItem(base64);
-        // Always delete the node — corrupted records must not block future bounties.
-        dataConfig.set(BOUNTIES_PATH + victimUuid.toString(), null);
-        save();
-        return item;
-    }
-
-    /**
-     * [NEW] Reads and deserializes bounty item WITHOUT deleting from storage.
-     * Used by GUI to render reward details in head lore.
-     * Returns null if there is no bounty or data is corrupted.
+     * Reads and deserializes the reward item WITHOUT removing it from storage.
+     * Used by the Browse GUI to display reward lore on each head.
      */
     public ItemStack getBountyItem(UUID victimUuid) {
-        if (!hasBounty(victimUuid)) return null;
-        String base64 = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".item");
-        return deserializeItem(base64);
+        BountyRecord r = cache.get(victimUuid);
+        return r != null ? deserializeItem(r.itemBase64) : null;
+    }
+
+    /** Human-readable label, e.g. "10x DIAMOND". Null if no bounty exists. */
+    public String getBountyDescription(UUID victimUuid) {
+        BountyRecord r = cache.get(victimUuid);
+        return r != null ? r.itemDesc : null;
+    }
+
+    /** UUID of the sponsor who placed this bounty. Null if none. */
+    public UUID getSponsorUuid(UUID victimUuid) {
+        BountyRecord r = cache.get(victimUuid);
+        return r != null ? r.sponsorUuid : null;
+    }
+
+    // =========================================================================
+    // Write API — cache updated synchronously, SQL executed asynchronously
+    // =========================================================================
+
+    /**
+     * Stores a bounty.
+     * Cache update is synchronous so all subsequent reads are immediately
+     * consistent. The SQL INSERT OR REPLACE runs on an async thread.
+     *
+     * <p>Caller is responsible for checking {@link #hasBounty} first.
+     */
+    public void setBounty(UUID sponsorUuid, UUID victimUuid, ItemStack item) {
+        String base64 = serializeItem(item);
+        if (base64 == null) {
+            plugin.getLogger().warning(
+                    "[BountyManager] setBounty() — item not serializable, aborted.");
+            return;
+        }
+
+        String tName = Bukkit.getOfflinePlayer(victimUuid).getName();
+        if (tName == null) tName = victimUuid.toString().substring(0, 8) + "…";
+
+        String itemDesc  = item.getAmount() + "x " + item.getType().name();
+        int    amount    = item.getAmount();
+        long   timestamp = System.currentTimeMillis();
+
+        // Synchronous cache write — instantly visible to all callers
+        cache.put(victimUuid, new BountyRecord(
+                sponsorUuid, tName, base64, itemDesc, amount, timestamp));
+
+        // Async SQL write
+        final String fName = tName;
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try (PreparedStatement ps = connection.prepareStatement(SQL_UPSERT)) {
+                ps.setString(1, victimUuid.toString());
+                ps.setString(2, sponsorUuid.toString());
+                ps.setString(3, fName);
+                ps.setString(4, base64);
+                ps.setString(5, itemDesc);
+                ps.setInt   (6, amount);
+                ps.setLong  (7, timestamp);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE,
+                        "[BountyManager] Failed to write bounty for victim "
+                        + victimUuid, e);
+            }
+        });
     }
 
     /**
-     * [NEW] Returns ordered list of UUIDs for all victims with active bounties.
-     * Order = YAML insertion order (chronological).
-     * Used by browse GUI for paginated head list.
+     * Atomically claims and removes the bounty.
+     * Removes from cache immediately; SQL DELETE runs async.
+     * Returns the deserialized reward item, or null if none/corrupted.
      */
-    public List<UUID> getAllBountyVictimUuids() {
-        ConfigurationSection section = dataConfig.getConfigurationSection("bounties");
-        if (section == null) return new ArrayList<>();
-        List<UUID> result = new ArrayList<>();
-        for (String key : section.getKeys(false)) {
-            try {
-                result.add(UUID.fromString(key));
-            } catch (IllegalArgumentException ignored) {
-                // Corrupted UUID key — skip.
-            }
-        }
-        return result;
+    public ItemStack claimAndRemoveBounty(UUID victimUuid) {
+        BountyRecord record = cache.remove(victimUuid);
+        if (record == null) return null;
+        asyncDelete(victimUuid);
+        return deserializeItem(record.itemBase64);
     }
 
-    /** Cancels bounty without drop. Item is intentionally lost (no bounty recall). */
+    /**
+     * Cancels a bounty without dropping the item.
+     * Sponsors cannot recall their bounty — the item is intentionally lost.
+     */
     public void cancelBounty(UUID victimUuid) {
-        dataConfig.set(BOUNTIES_PATH + victimUuid.toString(), null);
-        save();
+        cache.remove(victimUuid);
+        asyncDelete(victimUuid);
     }
 
-    /** "10x DIAMOND" etc. Null if no bounty exists. */
-    public String getBountyDescription(UUID victimUuid) {
-        return dataConfig.getString(BOUNTIES_PATH + victimUuid + ".itemDesc");
-    }
+    // =========================================================================
+    // Helpers
+    // =========================================================================
 
-    /** Sponsor UUID or null. */
-    public UUID getSponsorUuid(UUID victimUuid) {
-        String raw = dataConfig.getString(BOUNTIES_PATH + victimUuid + ".sponsor");
-        if (raw == null) return null;
-        try { return UUID.fromString(raw); } catch (IllegalArgumentException e) { return null; }
+    private void asyncDelete(UUID victimUuid) {
+        if (connection == null) return;
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try (PreparedStatement ps = connection.prepareStatement(SQL_DELETE)) {
+                ps.setString(1, victimUuid.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE,
+                        "[BountyManager] Failed to delete bounty for " + victimUuid, e);
+            }
+        });
     }
 }

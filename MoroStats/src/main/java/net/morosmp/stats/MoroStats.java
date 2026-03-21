@@ -1,73 +1,90 @@
 package net.morosmp.stats;
 
-import com.mongodb.client.MongoClient;
-import com.mongodb.client.MongoClients;
-import com.mongodb.client.MongoCollection;
-import com.mongodb.client.model.ReplaceOptions;
-import org.bson.Document;
-import org.bukkit.Bukkit;
-import org.bukkit.Statistic;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
-import net.milkbowl.vault.economy.Economy;
 
-public class MoroStats extends JavaPlugin implements Listener {
-    private MongoClient mongoClient;
-    private MongoCollection<Document> collection;
-    private static Economy econ = null;
+/**
+ * MoroStats — main plugin class.
+ *
+ * <h2>Startup sequence</h2>
+ * <ol>
+ *   <li>Detect whether PlaceholderAPI is installed.</li>
+ *   <li>Create {@link ScoreboardManager}.</li>
+ *   <li>Register {@link PlayerListener} to handle join/quit.</li>
+ *   <li>Give scoreboards to any players already online
+ *       (handles {@code /reload} or hot-loading the plugin mid-session).</li>
+ *   <li>Start the async 1-second update task.</li>
+ * </ol>
+ *
+ * <h2>Shutdown sequence</h2>
+ * <ol>
+ *   <li>Cancel the update task.</li>
+ *   <li>Delete every active {@link fr.mrmicky.fastboard.FastBoard}, which sends
+ *       a {@code REMOVE_OBJECTIVE} packet to each client — the scoreboard
+ *       disappears from their screen gracefully.</li>
+ * </ol>
+ */
+public class MoroStats extends JavaPlugin {
+
+    private ScoreboardManager scoreboardManager;
 
     @Override
     public void onEnable() {
-        saveDefaultConfig();
-        RegisteredServiceProvider<Economy> rsp = getServer().getServicesManager().getRegistration(Economy.class);
-        if (rsp != null) econ = rsp.getProvider();
+        // ── 1. Detect PlaceholderAPI ───────────────────────────────────────────
+        boolean papiAvailable = getServer()
+                .getPluginManager()
+                .getPlugin("PlaceholderAPI") != null;
 
-        // Read URI; ideally keep real credentials out until server deployment.
-        String uri = getConfig().getString("mongodb-uri", "mongodb://localhost:27017");
-        String dbName = getConfig().getString("database-name", "morosmp");
-
-        try {
-            mongoClient = MongoClients.create(uri);
-            collection = mongoClient.getDatabase(dbName).getCollection("players");
-            getServer().getPluginManager().registerEvents(this, this);
-            getLogger().info("✅ MoroStats connected to MongoDB!");
-        } catch (Exception e) {
-            getLogger().severe("❌ Failed to connect to MongoDB: " + e.getMessage());
+        if (papiAvailable) {
+            getLogger().info("PlaceholderAPI detected — stat placeholders enabled.");
+        } else {
+            getLogger().warning(
+                    "PlaceholderAPI not found. Stat placeholders will show 'N/A'. "
+                    + "Install PlaceholderAPI and the Statistic expansion for full functionality.");
         }
-    }
 
-    @EventHandler
-    public void onQuit(PlayerQuitEvent e) {
-        Player p = e.getPlayer();
-        
-        // 1) Read data on the main thread (safe)
-        String name = p.getName().toLowerCase();
-        int kills = p.getStatistic(Statistic.PLAYER_KILLS);
-        int deaths = p.getStatistic(Statistic.DEATHS);
-        double balance = econ != null ? econ.getBalance(p) : 0.0;
-        String playtime = (p.getStatistic(Statistic.PLAY_ONE_MINUTE) / 20 / 3600) + "h";
+        // ── 2. Create the scoreboard manager ──────────────────────────────────
+        scoreboardManager = new ScoreboardManager(this, papiAvailable);
 
-        // 2) Push to database asynchronously (no tick lag)
-        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-            Document stats = new Document("username", name)
-                .append("kills", kills)
-                .append("deaths", deaths)
-                .append("balance", balance)
-                .append("playtime", playtime)
-                .append("isPrivate", false);
+        // ── 3. Register the join / quit listener ──────────────────────────────
+        getServer().getPluginManager()
+                .registerEvents(new PlayerListener(scoreboardManager), this);
 
-            if (collection != null) {
-                collection.replaceOne(new Document("username", name), stats, new ReplaceOptions().upsert(true));
-            }
-        });
+        // ── 4. Give scoreboards to players already online (reload support) ────
+        // Without this loop, anyone online at plugin-load time would have no
+        // scoreboard until they reconnect.
+        int reloaded = 0;
+        for (Player player : getServer().getOnlinePlayers()) {
+            scoreboardManager.addPlayer(player);
+            reloaded++;
+        }
+        if (reloaded > 0) {
+            getLogger().info("Gave scoreboards to " + reloaded
+                    + " already-online player(s) (reload detected).");
+        }
+
+        // ── 5. Start the async update task (every 20 ticks = 1 second) ────────
+        // This MUST be called AFTER step 4 so the first tick doesn't try to
+        // update boards for players who haven't been added yet.
+        scoreboardManager.startUpdateTask();
+
+        getLogger().info("MoroStats enabled — scoreboard running.");
     }
 
     @Override
     public void onDisable() {
-        if (mongoClient != null) mongoClient.close();
+        // Cancel the update task and clean up all FastBoard instances.
+        // FastBoard.delete() sends REMOVE_OBJECTIVE to each client, so the
+        // sidebar disappears immediately rather than ghosting until the next
+        // login.
+        if (scoreboardManager != null) {
+            scoreboardManager.stopUpdateTask();
+        }
+        getLogger().info("MoroStats disabled — all scoreboards removed.");
+    }
+
+    // ── Public accessor (useful if other plugin classes need the manager) ──────
+    public ScoreboardManager getScoreboardManager() {
+        return scoreboardManager;
     }
 }
