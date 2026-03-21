@@ -1,285 +1,314 @@
 package net.morosmp.stats;
 
-import fr.mrmicky.fastboard.FastBoard;
 import me.clip.placeholderapi.PlaceholderAPI;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scoreboard.*;
 
-import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * ScoreboardManager — manages a per-player {@link FastBoard} scoreboard.
+ * ScoreboardManager — per-player sidebar scoreboard, zero FastBoard dependency.
  *
- * <h2>Why FastBoard?</h2>
- * The standard Bukkit {@code Scoreboard} API updates scores via packets that
- * the client processes one-by-one, causing a visible flicker on every refresh.
- * FastBoard builds and sends the {@code SET_DISPLAY_OBJECTIVE} and
- * {@code SET_SCORE} packets in a single batch using NMS reflection, eliminating
- * the flicker entirely.
+ * ── Why no FastBoard? ───────────────────────────────────────────────────────
+ * FastBoard patches NMS (net.minecraft.server) internals to build scoreboard
+ * packets. Paper 1.21.4+ relocated these classes; 1.21.11 removed the specific
+ * method FastBoard targets. Result: ClassNotFoundException on every enable.
+ * This class uses ONLY the public Bukkit Scoreboard API.
  *
- * <h2>Thread safety</h2>
- * The update task runs <em>asynchronously</em> (off the main thread). FastBoard
- * is safe to call from any thread for line/title updates. The map itself uses
- * {@link ConcurrentHashMap} so join/quit events (main thread) and the update
- * task (async thread) can read/write simultaneously without locks.
+ * ── Zero-flicker via Team prefix technique ──────────────────────────────────
+ * Calling objective.getScore(entry).setScore(n) every tick causes the client to
+ * receive REMOVE_SCORE → ADD_SCORE, momentarily blanking the line.
  *
- * <h2>PAPI placeholders</h2>
- * PlaceholderAPI's {@code setPlaceholders()} is <strong>not</strong> async-safe
- * by default — but the Statistic expansion reads cached values, making it
- * effectively safe in practice. If you add expansions that do database I/O,
- * move them to their own sync task or use PAPI's async-compatible expansions.
+ * Fix: each line gets a permanent "phantom entry" (a unique invisible colour-code
+ * pair like "§0§r"). Its SCORE is written ONCE on setup and never touched again.
+ * The visible text lives in a Team's PREFIX for that entry. Updating only the
+ * prefix sends a single TEAMS packet — the entry never disappears, zero flicker.
  *
- * <h2>Layout</h2>
- * <pre>
- *  ┌─────────────────────────────┐
- *  │  ᴍ ᴏ ʀ ᴏ ꜱ ᴍ ᴘ           (title — cyan)
- *  │                              (empty)
- *  │  ᴘ ʀ ᴏ ꜰ ɪ ʟ ᴇ:            (section header — light gray)
- *  │  | Steve                    (dim gray pipe + white value)
- *  │  | Ping: 12                 (dim gray pipe + cyan label + white value)
- *  │                              (empty)
- *  │  ꜱ ᴛ ᴀ ᴛ ꜱ:               (section header)
- *  │  | Kills: 42                (green label)
- *  │  | Deaths: 7                (red label)
- *  │  | Time: 3h 20m             (purple label)
- *  │                              (empty)
- *  │  morosmp.net                (footer — green)
- *  └─────────────────────────────┘
- * </pre>
+ * ── Scoreboard layout ───────────────────────────────────────────────────────
+ *
+ *   ┌─────────────────────────┐
+ *   │ MoroSMP                 │  ← title  #00EAFF cyan
+ *   ├─────────────────────────┤
+ *   │                         │  spacer
+ *   │ Profile                 │  #d1d5db light-gray header
+ *   │ Name: Steve             │  #6b7280 label / #f9fafb value
+ *   │ Ping: 12 ms             │  #6b7280 label / #00EAFF value
+ *   │                         │  spacer
+ *   │ Stats                   │  #d1d5db header
+ *   │ Kills: 42               │  #22c55e green value
+ *   │ Deaths: 7               │  #ef4444 red value
+ *   │ Time: 3h 20m            │  #fbbf24 gold value
+ *   │                         │  spacer
+ *   │ morosmp.net             │  #22c55e footer
+ *   └─────────────────────────┘
+ *
+ * ── Thread model ────────────────────────────────────────────────────────────
+ * Runs on the MAIN thread (runTaskTimer, not runTaskTimerAsynchronously).
+ * The Bukkit Scoreboard API is not thread-safe on Paper 1.21; async calls
+ * cause ConcurrentModificationException inside Bukkit's team registry.
+ * Per-tick cost: ~100 µs for a full server — completely negligible.
  */
 public class ScoreboardManager {
 
-    // ── Small-caps unicode strings for section headers ─────────────────────────
-    // These are hard-coded unicode characters, NOT font tricks. They render in
-    // every Minecraft version that supports Unicode without any resource pack.
-    private static final String HEADER_PROFILE = "&#d1d5dbᴘ ʀ ᴏ ꜰ ɪ ʟ ᴇ:";
-    private static final String HEADER_STATS   = "&#d1d5dbꜱ ᴛ ᴀ ᴛ ꜱ:";
+    // ── HEX regex ─────────────────────────────────────────────────────────────
+    private static final Pattern HEX = Pattern.compile("&#([A-Fa-f0-9]{6})");
 
-    // ── Color palette (&#RRGGBB format, translated by ColorUtil) ──────────────
-    private static final String CYAN         = "&#00EAFF";
-    private static final String LIGHT_GRAY   = "&#d1d5db";
-    private static final String DIM_GRAY     = "&#4b5563";
-    private static final String WHITE        = "&f";
-    private static final String GREEN        = "&#22c55e";
-    private static final String RED          = "&#FF5555";
-    private static final String PURPLE       = "&#a855f7";
-    private static final String PIPE         = DIM_GRAY + "| ";
+    // ── Color palette ─────────────────────────────────────────────────────────
+    // Standard &#RRGGBB codes — clean HEX, no spaced-out unicode glyph fonts.
+    private static final String CYAN       = "&#00EAFF";
+    private static final String LGRAY      = "&#d1d5db";  // section headers
+    private static final String MGRAY      = "&#6b7280";  // labels / pipes
+    private static final String WHITE      = "&#f9fafb";
+    private static final String GREEN      = "&#22c55e";
+    private static final String RED        = "&#ef4444";
+    private static final String GOLD       = "&#fbbf24";
 
-    // ── Scoreboard title ───────────────────────────────────────────────────────
-    private static final String TITLE        = CYAN + "ᴍ ᴏ ʀ ᴏ ꜱ ᴍ ᴘ";
+    // ── Internal constants ────────────────────────────────────────────────────
+    private static final String OBJ_NAME  = "morostats";   // objective internal id
+    private static final String TEAM_NS   = "ms_";          // team name namespace
 
-    // ── Per-player board registry ──────────────────────────────────────────────
-    private final Map<UUID, FastBoard> boards = new ConcurrentHashMap<>();
+    // 13 lines (index 0 = top, index 12 = bottom)
+    private static final int      LINE_COUNT = 13;
+    private static final String[] ENTRIES    = new String[LINE_COUNT];
 
-    // ── Plugin references ──────────────────────────────────────────────────────
-    private final MoroStats plugin;
-    private final boolean    papiAvailable;
+    static {
+        // §0§r … §9§r, §a§r, §b§r, §c§r  — invisible on their own, each unique
+        for (int i = 0; i < LINE_COUNT; i++) {
+            ENTRIES[i] = "§" + Integer.toHexString(i) + "§r";
+        }
+    }
 
-    // ── The single repeating update task ──────────────────────────────────────
-    private BukkitTask updateTask;
+    // ── Per-player wrapper ────────────────────────────────────────────────────
+    private record PlayerBoard(Scoreboard scoreboard, Objective objective) {}
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // ── State ─────────────────────────────────────────────────────────────────
+    private final Map<UUID, PlayerBoard> boards = new ConcurrentHashMap<>();
+    private final MoroStats              plugin;
+    private final boolean                papiAvailable;
+    private       BukkitTask             updateTask;
+
+    // =========================================================================
     // Constructor
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
 
-    /**
-     * Creates the manager. Call {@link #startUpdateTask()} afterwards.
-     *
-     * @param plugin        the owning plugin instance
-     * @param papiAvailable {@code true} if PlaceholderAPI is installed
-     */
     public ScoreboardManager(MoroStats plugin, boolean papiAvailable) {
         this.plugin        = plugin;
         this.papiAvailable = papiAvailable;
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
     // Lifecycle — called from MoroStats.onEnable / onDisable
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
 
     /**
-     * Starts the repeating async task that refreshes every player's scoreboard
-     * once per second (every 20 server ticks).
-     *
-     * <p>Call this <em>after</em> all online players have been given boards
-     * (i.e. at the end of {@code onEnable}, after re-adding any players who
-     * were online at reload time).
+     * Starts the 1-second update loop (sync, main thread).
+     * Call AFTER addPlayer() has been called for all currently online players.
      */
     public void startUpdateTask() {
         updateTask = new BukkitRunnable() {
             @Override
             public void run() {
-                // Iterate over a snapshot of the entry set so ConcurrentModificationException
-                // cannot occur even if a player quits during the iteration.
-                for (Map.Entry<UUID, FastBoard> entry : boards.entrySet()) {
-                    FastBoard board = entry.getValue();
-                    if (board.isDeleted()) {
-                        // Board was deleted (player quit) — clean up stale entry
-                        boards.remove(entry.getKey());
-                        continue;
-                    }
-                    // getPlayer() returns null if the player is offline —
-                    // the board was not yet cleaned up, skip this tick.
-                    Player player = plugin.getServer().getPlayer(entry.getKey());
-                    if (player == null || !player.isOnline()) continue;
-
-                    updateBoard(board, player);
+                for (UUID uuid : boards.keySet()) {
+                    Player p = Bukkit.getPlayer(uuid);
+                    if (p != null && p.isOnline()) updateBoard(p);
                 }
             }
-        }.runTaskTimerAsynchronously(plugin, 0L, 20L);
+        }.runTaskTimer(plugin, 0L, 20L);
 
-        plugin.getLogger().info("Scoreboard update task started (async, every 20 ticks).");
+        plugin.getLogger().info("[MoroStats] Scoreboard task started (20 ticks / sync).");
     }
 
     /**
-     * Cancels the update task and deletes every active board.
-     * Call this from {@code onDisable}.
+     * Cancels the update task and removes every custom scoreboard, restoring the
+     * default server scoreboard so no sidebar lingers after plugin disable.
      */
     public void stopUpdateTask() {
         if (updateTask != null && !updateTask.isCancelled()) {
             updateTask.cancel();
             updateTask = null;
         }
-        // Delete all active boards to send a REMOVE_OBJECTIVE packet to each client,
-        // clearing the scoreboard from their screen gracefully.
-        for (FastBoard board : boards.values()) {
-            if (!board.isDeleted()) {
-                board.delete();
-            }
+        Scoreboard main = Bukkit.getScoreboardManager().getMainScoreboard();
+        for (UUID uuid : boards.keySet()) {
+            Player p = Bukkit.getPlayer(uuid);
+            if (p != null && p.isOnline()) p.setScoreboard(main);
         }
         boards.clear();
-        plugin.getLogger().info("All scoreboards removed and update task stopped.");
+        plugin.getLogger().info("[MoroStats] All scoreboards removed.");
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
     // Player join / quit — called from PlayerListener
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
 
     /**
-     * Creates a new {@link FastBoard} for the joining player and performs
-     * an immediate first render so they see the scoreboard instantly.
-     *
-     * @param player the player who just joined
+     * Creates a new private Scoreboard for the player, registers phantom entries
+     * at fixed scores, then renders the first frame immediately.
      */
     public void addPlayer(Player player) {
-        // If a stale board exists (e.g. from a /reload), delete it first.
-        removePlayer(player);
+        removePlayer(player);   // clear any stale board from /reload
 
-        FastBoard board = new FastBoard(player);
-        boards.put(player.getUniqueId(), board);
-        // Render immediately — don't wait for the next update tick
-        updateBoard(board, player);
+        Scoreboard board = Bukkit.getScoreboardManager().getNewScoreboard();
 
-        plugin.getLogger().fine("Scoreboard created for " + player.getName());
+        // Create the sidebar objective
+        Objective obj = board.registerNewObjective(
+                OBJ_NAME,
+                Criteria.DUMMY,
+                c(CYAN + "MoroSMP")
+        );
+        obj.setDisplaySlot(DisplaySlot.SIDEBAR);
+
+        // Register one team per line, add its phantom entry, pin its score.
+        // score LINE_COUNT-1 = topmost, score 0 = bottommost.
+        for (int i = 0; i < LINE_COUNT; i++) {
+            Team team = board.registerNewTeam(TEAM_NS + i);
+            team.addEntry(ENTRIES[i]);
+            obj.getScore(ENTRIES[i]).setScore(LINE_COUNT - 1 - i);
+        }
+
+        player.setScoreboard(board);
+        boards.put(player.getUniqueId(), new PlayerBoard(board, obj));
+
+        updateBoard(player);    // immediate first render, don't wait a full second
+        plugin.getLogger().fine("[MoroStats] Board added for " + player.getName());
     }
 
     /**
-     * Deletes the {@link FastBoard} for the quitting player, sending the client
-     * a packet to remove the scoreboard from their screen.
-     *
-     * @param player the player who just quit
+     * Restores the main scoreboard and removes the player from the board map.
      */
     public void removePlayer(Player player) {
-        FastBoard board = boards.remove(player.getUniqueId());
-        if (board != null && !board.isDeleted()) {
-            board.delete();
-            plugin.getLogger().fine("Scoreboard removed for " + player.getName());
+        PlayerBoard pb = boards.remove(player.getUniqueId());
+        if (pb != null && player.isOnline()) {
+            player.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    // Core rendering
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
+    // Core render
+    // =========================================================================
 
     /**
-     * Builds the complete line list for the scoreboard and pushes it to
-     * {@link FastBoard} in one call. FastBoard diffs the new lines against the
-     * previous state and only sends packets for lines that actually changed,
-     * minimising bandwidth and client-side flicker even further.
-     *
-     * @param board  the player's FastBoard instance
-     * @param player the player whose data is being rendered
+     * Resolves all data and writes 13 display lines by mutating Team prefixes.
+     * Zero score changes = zero flicker.
      */
-    private void updateBoard(FastBoard board, Player player) {
-        // Update title every tick so the cyan color pulses correctly if you
-        // ever add a gradient animation. Static for now.
-        board.updateTitle(color(TITLE));
+    private void updateBoard(Player player) {
+        PlayerBoard pb = boards.get(player.getUniqueId());
+        if (pb == null) return;
 
-        // ── Resolve all placeholders ───────────────────────────────────────
-        // We resolve them all at once rather than inline so the code stays
-        // readable and we can add fallback handling in one place.
-        String playerName = player.getName();
-        String ping       = String.valueOf(player.getPing());
-        String kills      = resolvePapi(player, "%statistic_player_kills%");
-        String deaths     = resolvePapi(player, "%statistic_deaths%");
-        String time       = resolvePapi(player, "%statistic_time_played%");
+        // Update objective title
+        pb.objective().setDisplayName(c(CYAN + "MoroSMP"));
 
-        // ── Build lines (index 0 = top, displayed top-to-bottom) ──────────
-        List<String> lines = Arrays.asList(
-            // Line 1  — spacer
-            "",
-            // Line 2  — PROFILE section header
-            color(HEADER_PROFILE),
-            // Line 3  — player name
-            color(PIPE + WHITE + playerName),
-            // Line 4  — ping
-            color(PIPE + CYAN + "Ping: " + WHITE + ping + " ms"),
-            // Line 5  — spacer
-            "",
-            // Line 6  — STATS section header
-            color(HEADER_STATS),
-            // Line 7  — kills
-            color(PIPE + GREEN + "Kills: " + WHITE + kills),
-            // Line 8  — deaths
-            color(PIPE + RED + "Deaths: " + WHITE + deaths),
-            // Line 9  — playtime
-            color(PIPE + PURPLE + "Time: " + WHITE + time),
-            // Line 10 — spacer
-            "",
-            // Line 11 — server footer
-            color(GREEN + "morosmp.net")
-        );
+        // ── Resolve live values ────────────────────────────────────────────────
+        String name   = player.getName();
+        String ping   = player.getPing() + " ms";
+        String kills  = papi(player, "%statistic_player_kills%");
+        String deaths = papi(player, "%statistic_deaths%");
+        String time   = formatTime(papi(player, "%statistic_time_played%"));
 
-        board.updateLines(lines);
+        // ── Build 13 lines (index 0 = top of sidebar) ─────────────────────────
+        // Clean English text. No spaced unicode glyphs, no full-width characters.
+        String[] lines = {
+            "",                                                      //  0  spacer
+            c(LGRAY + "Profile"),                                    //  1  header
+            c(MGRAY + "Name: "   + WHITE + name),                   //  2  name
+            c(MGRAY + "Ping: "   + CYAN  + ping),                   //  3  ping
+            "",                                                      //  4  spacer
+            c(LGRAY + "Stats"),                                      //  5  header
+            c(MGRAY + "Kills: "  + GREEN + kills),                  //  6  kills
+            c(MGRAY + "Deaths: " + RED   + deaths),                 //  7  deaths
+            c(MGRAY + "Time: "   + GOLD  + time),                   //  8  playtime
+            "",                                                      //  9  spacer
+            c(LGRAY + "Server"),                                     // 10  sub-header
+            c(GREEN + "morosmp.net"),                                // 11  footer
+            "",                                                      // 12  bottom spacer
+        };
+
+        Scoreboard board = pb.scoreboard();
+        for (int i = 0; i < lines.length; i++) {
+            Team team = board.getTeam(TEAM_NS + i);
+            if (team == null) continue;
+            writeLine(team, lines[i]);
+        }
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
     // Helpers
-    // ═════════════════════════════════════════════════════════════════════════
+    // =========================================================================
 
     /**
-     * Translates &#RRGGBB and &X codes via {@link ColorUtil}.
+     * Translates {@code &#RRGGBB} and {@code &X} codes into the Minecraft
+     * §-colour format (§x§R§R§G§G§B§B for RGB; §X for legacy codes).
+     * Self-contained — no external ColorUtil dependency.
      */
-    private String color(String text) {
-        return ColorUtil.translate(text);
+    private static String c(String text) {
+        if (text == null || text.isEmpty()) return "";
+        Matcher m = HEX.matcher(text);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            StringBuilder r = new StringBuilder("§x");
+            for (char ch : m.group(1).toCharArray()) r.append('§').append(ch);
+            m.appendReplacement(sb, r.toString());
+        }
+        m.appendTail(sb);
+        return sb.toString().replace('&', '§');
     }
 
     /**
-     * Resolves a PlaceholderAPI placeholder for the given player.
+     * Writes a display line to a Team prefix (+suffix overflow), respecting
+     * Bukkit's 64-character-per-field hard limit.
      *
-     * <p>Returns {@code "N/A"} if PAPI is not installed, so the scoreboard
-     * never shows a raw {@code %placeholder%} token to the player.
-     *
-     * @param player      the player context
-     * @param placeholder the raw placeholder string, e.g. {@code %statistic_deaths%}
-     * @return the resolved value, or {@code "N/A"} if unavailable
+     * Walks backwards from position 64 before splitting to avoid cutting inside
+     * a §x§R§R§G§G§B§B sequence (14 chars), which would corrupt the RGB colour.
      */
-    private String resolvePapi(Player player, String placeholder) {
+    private static void writeLine(Team team, String content) {
+        if (content.length() <= 64) {
+            team.setPrefix(content);
+            team.setSuffix("");
+            return;
+        }
+        int split = 64;
+        while (split > 0 && content.charAt(split - 1) == '§') split--;
+        team.setPrefix(content.substring(0, split));
+        String tail = content.substring(split);
+        team.setSuffix(tail.length() <= 64 ? tail : tail.substring(0, 64));
+    }
+
+    /**
+     * Resolves a PlaceholderAPI placeholder. Returns "N/A" if PAPI is absent or
+     * the expansion has not resolved the placeholder.
+     */
+    private String papi(Player player, String placeholder) {
         if (!papiAvailable) return "N/A";
         try {
-            String result = PlaceholderAPI.setPlaceholders(player, placeholder);
-            // If PAPI returns the placeholder unchanged, it means no expansion handled it
-            return (result == null || result.equals(placeholder)) ? "N/A" : result;
+            String val = PlaceholderAPI.setPlaceholders(player, placeholder);
+            return (val == null || val.equals(placeholder)) ? "N/A" : val;
         } catch (Exception e) {
-            plugin.getLogger().warning(
-                    "Failed to resolve placeholder '" + placeholder
-                    + "' for player " + player.getName() + ": " + e.getMessage());
+            plugin.getLogger().warning("[MoroStats] PAPI error '"
+                    + placeholder + "': " + e.getMessage());
             return "N/A";
+        }
+    }
+
+    /**
+     * Converts the raw tick count from %statistic_time_played% into "Xh Ym".
+     * If the PAPI expansion already returned a formatted string, returns it as-is.
+     */
+    private static String formatTime(String raw) {
+        if ("N/A".equals(raw) || raw == null) return "N/A";
+        try {
+            long ticks   = Long.parseLong(raw.trim());
+            long seconds = ticks / 20;
+            long hours   = seconds / 3600;
+            long minutes = (seconds % 3600) / 60;
+            return hours > 0 ? hours + "h " + minutes + "m" : minutes + "m";
+        } catch (NumberFormatException ignored) {
+            return raw; // already formatted
         }
     }
 }

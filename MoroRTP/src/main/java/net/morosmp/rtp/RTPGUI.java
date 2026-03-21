@@ -1,7 +1,7 @@
 package net.morosmp.rtp;
 
+import net.md_5.bungee.api.ChatColor;
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.Sound;
 import org.bukkit.entity.Player;
@@ -12,50 +12,119 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * RTPGUI — world-selection chest GUI for MoroRTP.
+ *
+ * V5 changes — HEX colour support:
+ *   Added static {@link #translateHex(String)} which uses Bungee's
+ *   {@link ChatColor#of(String)} to convert {@code &#RRGGBB} codes into the
+ *   §x§R§R§G§G§B§B legacy format. Without this, config values like
+ *   {@code &#DDEFE4OVERWORLD} were displayed as white text because Bukkit's
+ *   {@code translateAlternateColorCodes} does not understand {@code &#…} syntax.
+ *
+ *   {@code translateHex()} is now applied to:
+ *     - The inventory title  (gui.title)
+ *     - Every item display name  (gui.world.name, gui.nether.name, gui.end.name)
+ *
+ *   The GUI singleton pattern, robust title comparison, and sc() converter are
+ *   all preserved from v4.
+ */
 public class RTPGUI implements Listener {
+
+    // Matches &#RRGGBB — exactly 6 hex digits, case-insensitive
+    private static final Pattern HEX_PATTERN =
+            Pattern.compile("&#([A-Fa-f0-9]{6})");
+
     private final MoroRTP plugin;
 
-    // Cache the stripped title so we only compute it once per GUI open, not on
-    // every click event. This is also the key to the robust title comparison fix.
+    // Cached stripped title for robust InventoryClickEvent matching.
     private String cachedStrippedTitle = null;
 
     public RTPGUI(MoroRTP plugin) {
         this.plugin = plugin;
     }
 
-    // -------------------------------------------------------------------------
-    // Small-caps converter (kept local so RTPGUI has no external dependencies)
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Static HEX colour translator
+    // =========================================================================
+
+    /**
+     * Translates {@code &#RRGGBB} codes and {@code &X} legacy codes into the
+     * Minecraft §-colour format, using Bungee's {@link ChatColor#of(String)}
+     * for the RGB conversion.
+     *
+     * <p>Apply this method to every string displayed in an inventory (names,
+     * lore, title) so that hex colour codes from {@code config.yml} render as
+     * true RGB rather than showing as plain white text.
+     *
+     * <p>Translation order:
+     * <ol>
+     *   <li>{@code &#RRGGBB} → {@code §x§R§R§G§G§B§B}  (via Bungee ChatColor.of)</li>
+     *   <li>{@code &X}       → {@code §X}               (Bukkit translateAlternate)</li>
+     * </ol>
+     *
+     * @param text raw string with {@code &#RRGGBB} and/or {@code &X} codes
+     * @return fully translated legacy-colour string safe for item metadata
+     */
+    public static String translateHex(String text) {
+        if (text == null || text.isEmpty()) return "";
+
+        // Step 1: convert every &#RRGGBB occurrence using Bungee ChatColor.of()
+        // ChatColor.of("#RRGGBB").toString() produces §x§R§R§G§G§B§B
+        Matcher matcher = HEX_PATTERN.matcher(text);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            String rgb  = "#" + matcher.group(1);           // e.g. "#DDEFE4"
+            String legacy = ChatColor.of(rgb).toString();   // §x§D§D§E§F§E§4
+            // quoteReplacement prevents $ and \ from being treated as regex tokens
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(legacy));
+        }
+        matcher.appendTail(buffer);
+
+        // Step 2: translate remaining &X codes (§a, §c, §r, etc.)
+        return org.bukkit.ChatColor
+                .translateAlternateColorCodes('&', buffer.toString());
+    }
+
+    // =========================================================================
+    // Small-caps converter
+    // =========================================================================
+
+    /** Converts ASCII letters to Small Caps unicode glyphs for the premium UI. */
     public String sc(String text) {
         String normal = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
         String small  = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀꜱᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀꜱᴛᴜᴠᴡxʏᴢ";
         StringBuilder sb = new StringBuilder();
         boolean skip = false;
         for (char c : text.toCharArray()) {
-            if (c == '§') { skip = true; sb.append(c); continue; }
-            if (skip)     { sb.append(c); skip = false; continue; }
+            if (c == '§') { skip = true;  sb.append(c); continue; }
+            if (skip)     { skip = false; sb.append(c); continue; }
             int idx = normal.indexOf(c);
             sb.append(idx != -1 ? small.charAt(idx) : c);
         }
         return sb.toString();
     }
 
-    // -------------------------------------------------------------------------
-    // openMenu — builds and shows the inventory to the player
-    // -------------------------------------------------------------------------
-    public void openMenu(Player player) {
-        int size  = plugin.getConfig().getInt("gui.size", 27);
-        // Apply small-caps to the raw config title (§-codes already present)
-        String title = sc(plugin.getConfig().getString("gui.title", "§5Moro Random Teleport"));
+    // =========================================================================
+    // openMenu
+    // =========================================================================
 
-        // Cache the ChatColor-stripped version for use in the click handler.
-        // ChatColor.stripColor removes all §x sequences so the comparison is
-        // immune to formatting differences between what we set and what Bukkit
-        // returns from InventoryView#getTitle().
-        cachedStrippedTitle = ChatColor.stripColor(title);
+    public void openMenu(Player player) {
+        int size = plugin.getConfig().getInt("gui.size", 27);
+
+        // FIX: translateHex() must come BEFORE sc() so hex codes are resolved
+        // to §-format before the small-caps pass (which ignores §-prefixed chars).
+        String rawTitle = plugin.getConfig().getString(
+                "gui.title", "&#E0D7FFMORO RANDOM TELEPORT");
+        String title = sc(translateHex(rawTitle));
+
+        // Cache stripped title for click handler matching.
+        cachedStrippedTitle = org.bukkit.ChatColor.stripColor(title);
 
         Inventory inv = Bukkit.createInventory(null, size, title);
-
         inv.setItem(plugin.getConfig().getInt("gui.world.slot",  11), getItem("gui.world"));
         inv.setItem(plugin.getConfig().getInt("gui.nether.slot", 13), getItem("gui.nether"));
         inv.setItem(plugin.getConfig().getInt("gui.end.slot",    15), getItem("gui.end"));
@@ -63,28 +132,25 @@ public class RTPGUI implements Listener {
         player.openInventory(inv);
     }
 
-    // -------------------------------------------------------------------------
-    // Click handler — robust title check using stripped color codes
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Click handler
+    // =========================================================================
+
     @EventHandler
     public void onClick(InventoryClickEvent event) {
-        // FIX: Never compare raw titles directly. Bukkit may alter color-code
-        // representation internally, causing strict equality checks to fail even
-        // when the GUI is the correct one. Strip color from both sides first.
-        String viewTitle = ChatColor.stripColor(event.getView().getTitle());
+        String viewTitle = org.bukkit.ChatColor.stripColor(event.getView().getTitle());
 
-        // Lazy-init fallback in case openMenu was never called (shouldn't happen,
-        // but defensive programming keeps the plugin from NPE-crashing on boot).
+        // Lazy-init safety: compute cached title if openMenu hasn't been called yet.
         if (cachedStrippedTitle == null) {
-            cachedStrippedTitle = ChatColor.stripColor(
-                sc(plugin.getConfig().getString("gui.title", "§5Moro Random Teleport"))
-            );
+            String rawTitle = plugin.getConfig().getString(
+                    "gui.title", "&#E0D7FFMORO RANDOM TELEPORT");
+            cachedStrippedTitle = org.bukkit.ChatColor.stripColor(
+                    sc(translateHex(rawTitle)));
         }
 
         if (!viewTitle.equals(cachedStrippedTitle)) return;
 
-        // Cancel ALL clicks inside our GUI (prevents item duplication exploits)
-        event.setCancelled(true);
+        event.setCancelled(true); // lock the GUI completely
 
         if (event.getCurrentItem() == null
                 || event.getCurrentItem().getType() == Material.AIR) return;
@@ -99,16 +165,23 @@ public class RTPGUI implements Listener {
         if (slot == worldSlot || slot == netherSlot || slot == endSlot) {
             playClickSound(p);
             p.closeInventory();
-
             if      (slot == worldSlot)  plugin.getTeleportManager().startTeleport(p, "world");
             else if (slot == netherSlot) plugin.getTeleportManager().startTeleport(p, "world_nether");
             else                         plugin.getTeleportManager().startTeleport(p, "world_the_end");
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Item builder
+    // =========================================================================
+
+    /**
+     * Reads material and display name from config and constructs an ItemStack.
+     *
+     * <p>FIX: {@link #translateHex(String)} is applied to the display name so
+     * colour codes like {@code &#DDEFE4OVERWORLD} render as true RGB rather than
+     * defaulting to white. {@link #sc(String)} converts letters to small caps.
+     */
     private ItemStack getItem(String path) {
         Material mat = Material.matchMaterial(
                 plugin.getConfig().getString(path + ".material", "DIRT"));
@@ -117,12 +190,16 @@ public class RTPGUI implements Listener {
         ItemStack item = new ItemStack(mat);
         ItemMeta  meta = item.getItemMeta();
         if (meta != null) {
-            // sc() converts the colored name to small-caps glyphs
-            meta.setDisplayName(sc(plugin.getConfig().getString(path + ".name", "???")));
+            String rawName = plugin.getConfig().getString(path + ".name", "???");
+            meta.setDisplayName(sc(translateHex(rawName)));
             item.setItemMeta(meta);
         }
         return item;
     }
+
+    // =========================================================================
+    // Sound helper
+    // =========================================================================
 
     private void playClickSound(Player p) {
         try {

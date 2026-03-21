@@ -12,7 +12,6 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -20,36 +19,53 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * TeleportManager — manages RTP countdown, safe-location search, and async teleport.
+ * TeleportManager — countdown timer, safe-location search, and async teleport.
  *
- * V4 Changes — cooldown fix + async teleport:
+ * V5 Changes — three critical fixes:
  *
- *   BUG (v3): cooldown was applied inside the BukkitRunnable when ticks hit zero,
- *   BEFORE knowing whether a safe location existed or whether the teleport succeeded.
- *   A player who got "no safe spot found" was still locked out by a cooldown.
+ * FIX 1 — Safe-location logic (was broken for The End and Nether):
+ *   - Surface block must now be {@code isSolid()} in addition to passing the
+ *     blacklist check. This explicitly rejects VOID_AIR, AIR, CAVE_AIR, and
+ *     any other non-solid block as a landing surface — regardless of whether
+ *     they appear in the config blacklist.
+ *   - A dedicated {@code NETHER_HAZARDS} set (LAVA, MAGMA_BLOCK, FIRE, SOUL_FIRE,
+ *     LAVA) is checked against ALL three positions (surface, feet, head) for
+ *     Nether worlds. The regular blacklist check only covers the surface; hazards
+ *     can exist at feet/head level in the Nether even with a fixed Y level.
+ *   - The loop already generates fresh random (X, Z) coordinates each iteration,
+ *     so every rejection immediately tries a genuinely different location.
  *
- *   FIX: cooldown is now applied STRICTLY inside the CompletableFuture thenAccept
- *   callback of player.teleportAsync(), and ONLY when the boolean `success` is true.
- *   No safe spot → no cooldown. Teleport rejected by Paper → no cooldown.
+ * FIX 2 — ActionBar clear-before-cancel:
+ *   When {@link #cancelTeleport(Player)} fires, an empty ActionBar message is
+ *   sent first to instantly erase the countdown. Without this, the last
+ *   countdown value ("ᴛᴇʟᴇᴘᴏʀᴛɪɴɢ · 1s") lingers for ~3 seconds after
+ *   cancellation because the Minecraft client keeps the previous ActionBar
+ *   visible until it naturally fades.
  *
- *   PERF: Replaced synchronous p.teleport() with p.teleportAsync().
- *   Paper pre-loads the destination chunk off the main thread before moving the
- *   player, eliminating the brief TPS drop on first-time chunk generation.
- *
- *   END: max-attempts default raised to 100 in config.yml.
- *   The End has large void areas where rejection rate per attempt is very high.
+ * FIX 3 (preserved from V4) — Cooldown only on success:
+ *   Cooldown is applied strictly inside the teleportAsync success callback.
  */
 public class TeleportManager {
 
     // ── HEX color regex ───────────────────────────────────────────────────────
     private static final Pattern HEX = Pattern.compile("&#([A-Fa-f0-9]{6})");
 
-    // ── Color palette (&#RRGGBB format) ───────────────────────────────────────
+    // ── Color palette ─────────────────────────────────────────────────────────
     private static final String C_GREEN = "&#22c55e";
     private static final String C_RED   = "&#ef4444";
     private static final String C_MUTED = "&#9ca3af";
     private static final String C_WHITE = "&#f9fafb";
     private static final String C_GOLD  = "&#fbbf24";
+
+    // ── Nether-specific hazard set — checked at ALL block positions ───────────
+    // These are lethal even at feet/head level inside a Nether column.
+    // LAVA (source) and LAVA (flowing) are distinct materials in modern Paper.
+    private static final Set<Material> NETHER_HAZARDS = EnumSet.of(
+            Material.LAVA,
+            Material.MAGMA_BLOCK,
+            Material.FIRE,
+            Material.SOUL_FIRE
+    );
 
     // ── Runtime state ─────────────────────────────────────────────────────────
     private final MoroRTP plugin;
@@ -61,14 +77,9 @@ public class TeleportManager {
     }
 
     // =========================================================================
-    // HEX color translation
+    // HEX colour translation (used for ActionBar and chat messages)
     // =========================================================================
 
-    /**
-     * Converts {@code &#RRGGBB} hex codes and {@code &X} legacy codes to the
-     * §-format understood by Bungee TextComponent (ActionBar) and Bukkit chat.
-     * Must be called on every string before it is sent to a player.
-     */
     private static String color(String s) {
         Matcher m = HEX.matcher(s);
         StringBuffer sb = new StringBuffer();
@@ -85,7 +96,6 @@ public class TeleportManager {
     // Small-caps converter
     // =========================================================================
 
-    /** Replaces ASCII letters with Small Caps unicode equivalents. */
     public String sc(String text) {
         String normal = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
         String small  = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀꜱᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀꜱᴛᴜᴠᴡxʏᴢ";
@@ -104,11 +114,18 @@ public class TeleportManager {
     // Message helpers
     // =========================================================================
 
-    /** Sends ActionBar with HEX support. */
+    /** Sends an ActionBar message with full HEX colour support. */
     private void sendActionBar(Player player, String text) {
         player.spigot().sendMessage(
                 ChatMessageType.ACTION_BAR,
                 new TextComponent(color(text)));
+    }
+
+    /** Sends an empty ActionBar, instantly clearing any previous message. */
+    private void clearActionBar(Player player) {
+        player.spigot().sendMessage(
+                ChatMessageType.ACTION_BAR,
+                new TextComponent(""));
     }
 
     /** Sends a chat message with HEX + small-caps applied. */
@@ -136,7 +153,7 @@ public class TeleportManager {
         int cooldownSec = plugin.getConfig().getInt("teleport-cooldown", 300);
         int delaySec    = plugin.getConfig().getInt("teleport-delay",    3);
 
-        // ── Cooldown check — one-time chat warning, not a countdown ───────────
+        // Cooldown gate — single chat message, not a repeating countdown
         if (cooldowns.containsKey(player.getUniqueId())) {
             long remaining =
                     (cooldowns.get(player.getUniqueId()) - System.currentTimeMillis()) / 1000;
@@ -162,9 +179,7 @@ public class TeleportManager {
                 }
 
                 if (ticks <= 0) {
-                    // ── FIX: cooldown is NOT applied here ────────────────────
-                    // It is applied inside performRTP's teleportAsync callback
-                    // only if the teleport actually succeeds.
+                    // Cooldown is NOT set here — only in the teleportAsync callback.
                     teleportTasks.remove(player.getUniqueId());
                     this.cancel();
                     performRTP(player, worldName, cooldownSec);
@@ -187,28 +202,44 @@ public class TeleportManager {
     // Cancel Teleport — called by RTPListener on move / damage
     // =========================================================================
 
+    /**
+     * Cancels the active teleport countdown for the given player.
+     *
+     * <p>FIX: {@link #clearActionBar(Player)} is called FIRST to immediately
+     * erase the countdown text. Without this, the last "ᴛᴇʟᴇᴘᴏʀᴛɪɴɢ · Ns"
+     * message lingers on-screen for ~3 seconds after cancellation because the
+     * Minecraft client keeps the previous ActionBar visible until it fades.
+     */
     public void cancelTeleport(Player player) {
         if (!teleportTasks.containsKey(player.getUniqueId())) return;
+
         teleportTasks.get(player.getUniqueId()).cancel();
         teleportTasks.remove(player.getUniqueId());
+
+        // FIX: instantly erase the countdown actionbar BEFORE showing cancel message.
+        clearActionBar(player);
         sendActionBar(player, C_RED + "ᴄᴀɴᴄᴇʟʟᴇᴅ · " + C_MUTED + "You moved.");
     }
 
     // =========================================================================
-    // Perform RTP — find safe location, then teleport asynchronously
+    // Perform RTP
     // =========================================================================
 
     /**
-     * Searches for a safe location on the main thread (block API requirement),
-     * then calls {@link Player#teleportAsync} which pre-loads the destination
-     * chunk off-thread before moving the player.
+     * Finds a safe random location (main thread — block API requires it), then
+     * hands off to {@link Player#teleportAsync} to pre-load the chunk off-thread.
      *
-     * <p>{@code cooldownSec} is passed from the timer so it is captured at the
-     * moment the countdown started, insulating it from potential /reload changes.
-     *
-     * @param p           the player to teleport
-     * @param worldName   the target world name
-     * @param cooldownSec seconds of cooldown — applied ONLY on teleport success
+     * <p>FIX 1 — Strict safety checks:
+     * <ul>
+     *   <li><b>All worlds:</b> Surface block must be {@code isSolid()}.
+     *       This rejects VOID_AIR, AIR, CAVE_AIR, and any other non-solid
+     *       block as a landing surface without needing to enumerate them in the
+     *       config blacklist.</li>
+     *   <li><b>Nether:</b> {@link #NETHER_HAZARDS} (LAVA, MAGMA_BLOCK, FIRE,
+     *       SOUL_FIRE) are checked at surface, feet, AND head positions.
+     *       The regular blacklist only gates the surface; hazards can appear at
+     *       feet/head level in Nether columns.</li>
+     * </ul>
      */
     private void performRTP(Player p, String worldName, int cooldownSec) {
         World world = Bukkit.getWorld(worldName);
@@ -220,7 +251,6 @@ public class TeleportManager {
         int minDist     = plugin.getConfig().getInt("min-distance",  500);
         int maxDist     = plugin.getConfig().getInt("max-distance",  10000);
         int borderOff   = plugin.getConfig().getInt("border-offset", 15);
-        // Default 100 — handles The End where large void areas cause high rejection.
         int maxAttempts = plugin.getConfig().getInt("max-attempts",  100);
 
         double borderSize = world.getWorldBorder().getSize() / 2.0;
@@ -231,15 +261,16 @@ public class TeleportManager {
         boolean isNether    = world.getEnvironment() == World.Environment.NETHER;
         boolean scaleNether = plugin.getConfig().getBoolean("scale-nether-coords", true);
 
-        // Build blacklist once for this search session.
-        // Re-read from config so /reload takes effect without restart.
+        // Config-driven blacklist (re-read so /reload takes effect without restart).
         Set<Material> blacklist = buildBlacklist();
 
-        // ── Safe-location search loop (runs on the main thread) ───────────────
+        // ── Safe-location search (main thread, regenerates fresh X/Z each attempt) ─
         int     attempt = 0, x = 0, y = 0, z = 0;
         boolean found   = false;
 
         while (attempt++ < maxAttempts) {
+            // Generate fresh random (X, Z) every single attempt.
+            // This ensures every rejection tries a genuinely new location.
             int range = max - minDist;
             x = (int) (Math.random() * range) + minDist;
             z = (int) (Math.random() * range) + minDist;
@@ -252,27 +283,49 @@ public class TeleportManager {
                     ? plugin.getConfig().getInt("nether-y-level", 50)
                     : world.getHighestBlockYAt(x, z) + 1;
 
-            // Three-block check:
-            //   surface (y-1) — must not be blacklisted
-            //   feet    (y)   — must be air (player spawn block)
-            //   head    (y+1) — must be air (no suffocation)
-            Material surface = world.getBlockAt(x, y - 1, z).getType();
-            Material feet    = world.getBlockAt(x, y,     z).getType();
-            Material head    = world.getBlockAt(x, y + 1, z).getType();
+            // Fetch the three relevant blocks
+            Material surface = world.getBlockAt(x, y - 1, z).getType(); // landing block
+            Material feet    = world.getBlockAt(x, y,     z).getType(); // player's feet
+            Material head    = world.getBlockAt(x, y + 1, z).getType(); // player's head
 
-            if (!blacklist.contains(surface)
-                    && feet.isAir() && !blacklist.contains(feet)
-                    && head.isAir() && !blacklist.contains(head)) {
-                found = true;
-                break;
+            // ── Universal checks ───────────────────────────────────────────────
+            // 1. Surface must be solid — rejects VOID_AIR, AIR, CAVE_AIR, water,
+            //    lava source, etc. without needing them all in the config blacklist.
+            //    This is the primary protection against void landings in The End.
+            if (!surface.isSolid()) continue;
+
+            // 2. Surface must not be in the config blacklist (MAGMA, CACTUS, etc.)
+            if (blacklist.contains(surface)) continue;
+
+            // 3. Feet block must be passable air (player spawns inside it).
+            if (!feet.isAir() || blacklist.contains(feet)) continue;
+
+            // 4. Head block must be passable air (no suffocation).
+            if (!head.isAir() || blacklist.contains(head)) continue;
+
+            // ── Nether-specific hazard checks ──────────────────────────────────
+            // Lava pools, fire patches, and magma blocks can exist at any Y level
+            // in the Nether. Check ALL three positions against the hazard set —
+            // the blacklist only covers the surface.
+            if (isNether) {
+                if (NETHER_HAZARDS.contains(surface)
+                        || NETHER_HAZARDS.contains(feet)
+                        || NETHER_HAZARDS.contains(head)) {
+                    plugin.getLogger().fine(
+                            "[RTP] Nether hazard at ("
+                            + x + "," + y + "," + z + ")"
+                            + " surface=" + surface
+                            + " feet=" + feet
+                            + " head=" + head);
+                    continue;
+                }
             }
 
-            plugin.getLogger().fine(
-                    "[RTP] Rejected (" + x + "," + y + "," + z + ")"
-                    + " surface=" + surface + " feet=" + feet + " head=" + head);
+            found = true;
+            break;
         }
 
-        // ── No safe location — abort WITHOUT applying cooldown ────────────────
+        // ── No safe location found — abort, no cooldown ───────────────────────
         if (!found) {
             msg(p,
                     C_RED + "ꜰᴀɪʟᴇᴅ · "
@@ -289,17 +342,11 @@ public class TeleportManager {
         final int fx = x, fy = y, fz = z;
         p.teleportAsync(new Location(world, fx + 0.5, fy, fz + 0.5))
                 .thenAccept(success ->
-                        // Schedule ALL post-teleport Bukkit API calls back to the
-                        // main server thread. The thenAccept callback runs on
-                        // Paper's async teleport pool, which is NOT the main thread.
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!p.isOnline()) return;
 
                             if (success) {
-                                // ── COOLDOWN APPLIED HERE AND ONLY HERE ───────
-                                // This is the sole location where cooldown is set.
-                                // Guaranteed to run only after a confirmed,
-                                // successful teleport with a pre-loaded chunk.
+                                // COOLDOWN APPLIED HERE AND ONLY HERE (FIX from V4).
                                 cooldowns.put(
                                         p.getUniqueId(),
                                         System.currentTimeMillis() + (cooldownSec * 1000L));
@@ -312,7 +359,6 @@ public class TeleportManager {
                                         + C_WHITE + "X: " + C_GOLD + fx
                                         + C_WHITE + "  Z: " + C_GOLD + fz);
                             } else {
-                                // Paper rejected the teleport — no cooldown.
                                 sendActionBar(p,
                                         C_RED + "ᴛᴇʟᴇᴘᴏʀᴛ ꜰᴀɪʟᴇᴅ · "
                                         + C_MUTED + "Please try again.");
@@ -326,7 +372,7 @@ public class TeleportManager {
     }
 
     // =========================================================================
-    // Build Material blacklist
+    // Build config-driven blacklist
     // =========================================================================
 
     private Set<Material> buildBlacklist() {
